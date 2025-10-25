@@ -1,0 +1,12 @@
+This 3.7V 10000mAh LiPo lithium battery has a PH2.0A connector and can be used for Raspberry Pi UPS board whose socket is PH2.0A and other project devices with PH2.0A connector.
+
+Specifications:
+Standard Voltage: 3.7V
+Capacity: 10000mAh
+Maximum load: Operating current: 3A
+Dimensions (± 2 mm): 115 x 65 x 8.8 mm (L x W x H).
+Over current protection: about 1.8-2.1A
+Plug type: PH2.0A.
+Weight: 155g
+
+Standard charging method: charge this battery at 4.25V at 0.2C constant current, then charge the battery at a constant voltage of 4.2V until the charging current is ≤0.05C 

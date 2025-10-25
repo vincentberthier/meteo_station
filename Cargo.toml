@@ -1,0 +1,25 @@
+[package]
+name = "meteo_station"
+version = "0.1.0"
+authors = ["Vincent Berthier <vincent.berthier@posteo.org>"]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+embassy-executor = { version = "0.9.1" }
+embassy-time = { version = "0.5.0" }
+esp-bootloader-esp-idf = { version = "0.3.0", features = ["esp32s3"] }
+esp-hal = { version = "1.0.0-rc.1", features = ["esp32s3", "unstable", "log-04"] }
+esp-backtrace = { version = "0.18.0", features = [
+    "println",
+    "esp32s3",
+    "panic-handler",
+] }
+esp-println = { version = "0.16.0", features = ["esp32s3", "log-04"] }
+esp-rtos = { version = "0.1.1", features = ["embassy", "log-04", "esp32s3"] }
+
+[profile.release]
+debug            = true
+debug-assertions = true
+lto              = "fat"
+codegen-units    = 1
