@@ -1,0 +1,48 @@
+[env]
+CARGO_MAKE_EXTEND_WORKSPACE_MAKEFILE = true
+TARGET = "thumbv8m.main-none-eabihf"
+CHIP = "RP2350"
+
+[tasks.format]
+install_crate = "rustfmt"
+command = "cargo"
+args = ["fmt", "--", "--emit=files"]
+
+[tasks.clippy]
+command = "cargo"
+args = ["clippy", "--", "-D", "warnings"]
+
+[tasks.build]
+description = "Build firmware"
+command = "cargo"
+args = ["build", "--release"]
+
+[tasks.flash]
+description = "Flash firmware"
+# command = "probe-rs"
+# args = ["run", "--chip", "${CHIP}", "target/${TARGET}/release/meteo_station"]
+script = '''
+cp target/${TARGET}/release/meteo_station target/${TARGET}/release/meteo_station.elf
+picotool uf2 convert target/${TARGET}/release/meteo_station.elf target/${TARGET}/release/meteo_station.uf2 --family rp2350-arm-s
+cp target/${TARGET}/release/meteo_station.uf2 /run/media/vincent/RP2350/
+rm target/${TARGET}/release/meteo_station.elf target/${TARGET}/release/meteo_station.uf2
+'''
+dependencies = ["build"]
+
+[tasks.run]
+description = "Flash and attach with RTT logging"
+command = "probe-rs"
+args = ["run", "--chip", "${CHIP}", "target/${TARGET}/release/meteo_station"]
+dependencies = ["build"]
+
+[tasks.clean]
+description = "Clean build artifacts"
+command = "cargo"
+args = ["clean"]
+
+[tasks.size]
+description = "Show binary size information"
+dependencies = ["build"]
+script = '''
+cargo-size check --target xtensa-esp32s3-none-elf --release
+'''

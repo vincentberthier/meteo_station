@@ -1,0 +1,6 @@
+[language-server.rust-analyzer.config]
+rustflags = ["--cfg", "no_std"]
+cargo = { target = "thumbv8m.main-none-eabihf", features = [], loadOutDirsFromCheck = false, buildScripts = { enable = true }, buildStd = ["core"] }
+check = { command = "clippy", args = ["--release", "--target", "thumbv8m.main-none-eabihf", "-Zbuild-std=core"], allTargets = false }
+except-features = ["format"]
+diagnostics.experimental.enable = true
