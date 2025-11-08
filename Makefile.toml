@@ -19,14 +19,14 @@ args = ["build", "--release"]
 
 [tasks.flash]
 description = "Flash firmware"
-# command = "probe-rs"
-# args = ["run", "--chip", "${CHIP}", "target/${TARGET}/release/meteo_station"]
-script = '''
-cp target/${TARGET}/release/meteo_station target/${TARGET}/release/meteo_station.elf
-picotool uf2 convert target/${TARGET}/release/meteo_station.elf target/${TARGET}/release/meteo_station.uf2 --family rp2350-arm-s
-cp target/${TARGET}/release/meteo_station.uf2 /run/media/vincent/RP2350/
-rm target/${TARGET}/release/meteo_station.elf target/${TARGET}/release/meteo_station.uf2
-'''
+command = "probe-rs"
+args = ["run", "--chip", "${CHIP}", "target/${TARGET}/release/meteo_station"]
+# script = '''
+# cp target/${TARGET}/release/meteo_station target/${TARGET}/release/meteo_station.elf
+# picotool uf2 convert target/${TARGET}/release/meteo_station.elf target/${TARGET}/release/meteo_station.uf2 --family rp2350-arm-s
+# cp target/${TARGET}/release/meteo_station.uf2 /run/media/vincent/RP2350/
+# rm target/${TARGET}/release/meteo_station.elf target/${TARGET}/release/meteo_station.uf2
+# '''
 dependencies = ["build"]
 
 [tasks.run]
