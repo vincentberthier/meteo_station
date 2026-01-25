@@ -6,37 +6,119 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-bt-hci = { version = "*", features = ["defmt", "embassy-time"] }
-cortex-m-rt = "0.7.3"
-cortex-m = { version = "0.7.7", features = ["inline-asm"] }
-cyw43 = { version = "0.5.0", features = ["bluetooth", "defmt"] }
-cyw43-pio = { version = "0.8.0", features = ["defmt"] }
-defmt = "1.0.1"
-defmt-rtt = "1.1.0"
-embassy-executor = { version = "0.9.1", features = ["arch-cortex-m", "executor-thread", "defmt"] }
-embassy-futures = { version = "0.1.2", features = ["defmt"] }
-embassy-rp = { version = "0.8.0", features = ["defmt", "rp235xa", "time-driver", "boot2-w25q080", "critical-section-impl"] }
-embassy-sync = { version = "0.7.2", features = ["defmt"] }
-embassy-time = { version = "0.5.0", features = ["defmt"] }
-heapless = { version = "0.9.1", features = ["defmt"] }
-panic-probe = { version = "1.0.0", features = ["print-defmt"] }
-static_cell = "2.1.1"
-trouble-host = { version = "0.5.0", features = ["defmt"] }
-fixed = "1.29.0"
-fixed-macro = "1.2.0"
+# Library dependencies (platform-agnostic)
+embedded-hal-async = "1.0"
 
-[patch.crates-io]
-cyw43 = { git = "https://github.com/embassy-rs/embassy.git", rev = "ff42c61dc6c0f870b4022aca52f3c45d992ae735" }
-cyw43-pio = { git = "https://github.com/embassy-rs/embassy.git", rev = "ff42c61dc6c0f870b4022aca52f3c45d992ae735" }
-embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "ff42c61dc6c0f870b4022aca52f3c45d992ae735" }
-embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", rev = "ff42c61dc6c0f870b4022aca52f3c45d992ae735" }
-embassy-rp = { git = "https://github.com/embassy-rs/embassy.git", rev = "ff42c61dc6c0f870b4022aca52f3c45d992ae735" }
-embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", rev = "ff42c61dc6c0f870b4022aca52f3c45d992ae735" }
-embassy-time-driver = { git = "https://github.com/embassy-rs/embassy.git", rev = "ff42c61dc6c0f870b4022aca52f3c45d992ae735" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "ff42c61dc6c0f870b4022aca52f3c45d992ae735" }
-trouble-host = { git = "https://github.com/embassy-rs/trouble.git", branch = "main" }
+# Target-specific dependencies (embedded only)
+[target.'cfg(target_arch = "arm")'.dependencies]
+cortex-m = { version = "0.7.7", features = ["inline-asm", "critical-section-single-core"] }
+cortex-m-rt = "0.7.5"
+defmt = "1.0"
+defmt-rtt = "1.0"
+embassy-executor = { version = "0.7", features = ["arch-cortex-m", "executor-thread", "defmt"] }
+embassy-stm32 = { version = "0.5", features = ["defmt", "stm32h753zi", "time-driver-tim2", "memory-x"] }
+embassy-sync = { version = "0.7", features = ["defmt"] }
+embassy-time = { version = "0.5", features = ["defmt", "generic-queue-8"] }
+panic-probe = { version = "1.0", features = ["print-defmt"] }
+
+[dev-dependencies]
+test-log = "0.2"
+env_logger = "0.11"
 
 [profile.release]
 debug = true
 lto = true
-opt-level = "z"  # Optimize for size
+opt-level = "z"
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(coverage,coverage_nightly)'] }
+
+[workspace.lints.clippy]
+nursery = "warn"
+pedantic = "warn"
+restriction = "allow" # activated individually below
+significant_drop_in_scrutinee = { level = "allow", priority = 1 } # annoying false positives on github
+wildcard_imports = { level = "allow", priority = 1 }
+
+# Restriction lints
+absolute_paths = { level = "warn", priority = 1 }
+alloc_instead_of_core = { level = "warn", priority = 1 }
+# allow_attributes = { level = "warn", priority = 1 }
+allow_attributes_without_reason = { level = "warn", priority = 1 }
+arithmetic_side_effects = { level = "warn", priority = 1 }
+assertions_on_result_states = { level = "warn", priority = 1 }
+as_underscore = { level = "warn", priority = 1 }
+big_endian_bytes = { level = "warn", priority = 1 }
+clone_on_ref_ptr = { level = "warn", priority = 1 }
+create_dir = { level = "warn", priority = 1 }
+dbg_macro = { level = "warn", priority = 1 }
+default_numeric_fallback = { level = "warn", priority = 1 }
+default_union_representation = { level = "warn", priority = 1 }
+deref_by_slicing = { level = "warn", priority = 1 }
+disallowed_script_idents = { level = "warn", priority = 1 }
+else_if_without_else = { level = "warn", priority = 1 }
+empty_drop = { level = "warn", priority = 1 }
+empty_structs_with_brackets = { level = "warn", priority = 1 }
+exit = { level = "warn", priority = 1 }
+expect_used = { level = "warn", priority = 1 }
+filetype_is_file = { level = "warn", priority = 1 }
+float_cmp_const = { level = "warn", priority = 1 }
+fn_to_numeric_cast_any = { level = "warn", priority = 1 }
+format_push_string = { level = "warn", priority = 1 }
+get_unwrap = { level = "warn", priority = 1 }
+host_endian_bytes = { level = "warn", priority = 1 }
+if_then_some_else_none = { level = "warn", priority = 1 }
+impl_trait_in_params = { level = "warn", priority = 1 }
+indexing_slicing = { level = "allow", priority = 1 }
+inline_asm_x86_att_syntax = { level = "warn", priority = 1 }
+inline_asm_x86_intel_syntax = { level = "warn", priority = 1 }
+integer_division = { level = "warn", priority = 1 }
+iter_over_hash_type = { level = "warn", priority = 1 }
+large_include_file = { level = "warn", priority = 1 }
+let_underscore_must_use = { level = "warn", priority = 1 }
+little_endian_bytes = { level = "warn", priority = 1 }
+lossy_float_literal = { level = "warn", priority = 1 }
+map_err_ignore = { level = "warn", priority = 1 }
+mem_forget = { level = "warn", priority = 1 }
+missing_assert_message = { level = "warn", priority = 1 }
+missing_asserts_for_indexing = { level = "warn", priority = 1 }
+mixed_read_write_in_expression = { level = "warn", priority = 1 }
+multiple_inherent_impl = { level = "allow", priority = 1 }
+multiple_unsafe_ops_per_block = { level = "warn", priority = 1 }
+mutex_atomic = { level = "warn", priority = 1 }
+needless_raw_strings = { level = "warn", priority = 1 }
+panic_in_result_fn = { level = "warn", priority = 1 }
+panic = { level = "warn", priority = 1 }
+print_stderr = { level = "warn", priority = 1 }
+print_stdout = { level = "warn", priority = 1 }
+pub_without_shorthand = { level = "warn", priority = 1 }
+rc_buffer = { level = "warn", priority = 1 }
+rc_mutex = { level = "warn", priority = 1 }
+redundant_type_annotations = { level = "warn", priority = 1 }
+rest_pat_in_fully_bound_structs = { level = "warn", priority = 1 }
+same_name_method = { level = "warn", priority = 1 }
+# self_named_module_files = { level = "warn", priority = 1 }
+semicolon_inside_block = { level = "warn", priority = 1 }
+shadow_unrelated = { level = "warn", priority = 1 }
+string_add = { level = "warn", priority = 1 }
+string_slice = { level = "warn", priority = 1 }
+string_to_string = { level = "warn", priority = 1 }
+str_to_string = { level = "warn", priority = 1 }
+suspicious_xor_used_as_pow = { level = "warn", priority = 1 }
+tests_outside_test_module = { level = "warn", priority = 1 }
+todo = { level = "warn", priority = 1 }
+try_err = { level = "warn", priority = 1 }
+undocumented_unsafe_blocks = { level = "warn", priority = 1 }
+unimplemented = { level = "warn", priority = 1 }
+unnecessary_safety_comment = { level = "warn", priority = 1 }
+unnecessary_safety_doc = { level = "warn", priority = 1 }
+unnecessary_self_imports = { level = "warn", priority = 1 }
+unneeded_field_pattern = { level = "warn", priority = 1 }
+unreachable = { level = "warn", priority = 1 }
+unseparated_literal_suffix = { level = "warn", priority = 1 }
+unwrap_in_result = { level = "warn", priority = 1 }
+unwrap_used = { level = "warn", priority = 1 }
+verbose_file_reads = { level = "warn", priority = 1 }
+
+[workspace.metadata.cargo-machete]
+ignored = []

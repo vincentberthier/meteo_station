@@ -1,44 +1,24 @@
 #![no_std]
 #![no_main]
 
-mod ble;
-mod bluetooth;
-mod pressure;
-
-use bt_hci::controller::ExternalController;
-use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_rp::{
-    bind_interrupts,
-    gpio::{Level, Output},
-    i2c::{Config as I2cConfig, I2c, InterruptHandler as I2cInterruptHandler},
-    peripherals::{DMA_CH0, PIO0},
-    pio::{InterruptHandler as PioInterruptHandler, Pio},
-};
+use embassy_stm32::gpio::{Level, Output, Speed};
+use embassy_stm32::i2c::Master;
+use embassy_stm32::i2c::{Config as I2cConfig, I2c};
+use embassy_stm32::mode::Async;
+use embassy_stm32::{bind_interrupts, peripherals};
 use embassy_time::{Duration, Timer};
-use static_cell::StaticCell;
-use {defmt_rtt as _, embassy_rp as _, panic_probe as _};
+use meteo_station::bmp388::Bmp388;
+use {defmt_rtt as _, panic_probe as _};
 
-use crate::pressure::read_barometer;
-
-bind_interrupts!(struct BleIrqs {
-    PIO0_IRQ_0 => PioInterruptHandler<PIO0>;
-});
-
-bind_interrupts!(struct I2cIrqs {
-    I2C0_IRQ => I2cInterruptHandler<embassy_rp::peripherals::I2C0>;
+bind_interrupts!(struct Irqs {
+    I2C1_EV => embassy_stm32::i2c::EventInterruptHandler<peripherals::I2C1>;
+    I2C1_ER => embassy_stm32::i2c::ErrorInterruptHandler<peripherals::I2C1>;
 });
 
 #[embassy_executor::task]
-async fn cyw43_task(
-    runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
-) -> ! {
-    runner.run().await
-}
-
-#[embassy_executor::task]
-async fn blink_led(mut led: Output<'static>) {
+async fn blink_led_green(mut led: Output<'static>) {
     loop {
         led.set_high();
         Timer::after(Duration::from_millis(500)).await;
@@ -47,62 +27,97 @@ async fn blink_led(mut led: Output<'static>) {
     }
 }
 
-#[embassy_executor::main]
-async fn main(spawner: Spawner) {
-    info!("Starting Pioc 2 W Weather Station");
-    let p = embassy_rp::init(Default::default());
+#[embassy_executor::task]
+async fn blink_led_yellow(mut led: Output<'static>) {
+    loop {
+        led.set_high();
+        Timer::after(Duration::from_millis(200)).await;
+        led.set_low();
+        Timer::after(Duration::from_millis(200)).await;
+    }
+}
 
-    // Blinking led
-    let led = Output::new(p.PIN_1, Level::Low);
-    spawner.spawn(unwrap!(blink_led(led)));
+#[embassy_executor::task]
+async fn blink_led_external(mut led: Output<'static>) {
+    loop {
+        led.set_high();
+        Timer::after(Duration::from_millis(1000)).await;
+        led.set_low();
+        Timer::after(Duration::from_millis(1000)).await;
+    }
+}
 
-    // // Bluetooth
-    // let (fw, clm, btfw) = {
-    //     let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
-    //     let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
-    //     let btfw = include_bytes!("../cyw43-firmware/43439A0_btfw.bin");
-    //     (fw, clm, btfw)
-    // };
+#[embassy_executor::task]
+async fn read_barometer(i2c: I2c<'static, Async, Master>) {
+    const BMP388_ADDR: u8 = 0x77;
 
-    // let pwr = Output::new(p.PIN_23, Level::Low);
-    // let cs = Output::new(p.PIN_25, Level::High);
-    // let mut pio = Pio::new(p.PIO0, BleIrqs);
-    // let spi = PioSpi::new(
-    //     &mut pio.common,
-    //     pio.sm0,
-    //     RM2_CLOCK_DIVIDER,
-    //     pio.irq0,
-    //     cs,
-    //     p.PIN_24,
-    //     p.PIN_29,
-    //     p.DMA_CH0,
-    // );
+    debug!("Setting up barometer");
+    Timer::after(Duration::from_millis(100)).await;
 
-    // static STATE: StaticCell<cyw43::State> = StaticCell::new();
-    // let state = STATE.init(cyw43::State::new());
-    // let (_net_device, bt_device, mut control, runner) =
-    //     cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
-    // // spawner.spawn(unwrap!(cyw43_task(runner)));
-    // // control.init(clm).await;
-
-    // // let controller: ExternalController<_, 10> = ExternalController::new(bt_device);
-
-    // // Pressure sensor
-    // let i2c = I2c::new_async(
-    //     p.I2C0,
-    //     p.PIN_5, // SCL
-    //     p.PIN_4, // SDA
-    //     I2cIrqs,
-    //     I2cConfig::default(),
-    // );
-
-    info!("Init!");
-
-    // spawner.spawn(unwrap!(read_barometer(i2c)));
-    // spawner.spawn(unwrap!(ble::ble_task(controller, spawner)));
+    let mut sensor = match Bmp388::new(i2c, BMP388_ADDR).await {
+        Ok(s) => {
+            info!("BMP388 initialized successfully!");
+            s
+        }
+        Err(e) => {
+            error!("Failed to initialize BMP388: {:?}", Debug2Format(&e));
+            return;
+        }
+    };
 
     loop {
-        info!("Bing!");
+        match sensor.read().await {
+            Ok(reading) => {
+                info!(
+                    "Temperature: {}°C, Pressure: {} Pa ({} hPa)",
+                    trunc2(reading.temperature),
+                    trunc2(reading.pressure),
+                    trunc2(reading.pressure_hpa())
+                );
+            }
+            Err(e) => {
+                warn!("Failed to read sensor: {:?}", Debug2Format(&e));
+            }
+        }
+        Timer::after(Duration::from_secs(1)).await;
+    }
+}
+
+fn trunc2(v: f32) -> f32 {
+    let scaled = v * 100.0;
+    let scaled_i = scaled as i32;
+    scaled_i as f32 / 100.0
+}
+
+#[embassy_executor::main]
+async fn main(spawner: Spawner) {
+    info!("Starting Nucleo H753ZI Weather Station");
+    let p = embassy_stm32::init(Default::default());
+
+    // User LEDs: LD1 (green) = PB0, LD2 (yellow) = PE1, LD3 (red) = PB14
+    let led_green = Output::new(p.PB0, Level::Low, Speed::Low);
+    let led_yellow = Output::new(p.PE1, Level::Low, Speed::Low);
+    spawner.spawn(blink_led_green(led_green)).unwrap();
+    spawner.spawn(blink_led_yellow(led_yellow)).unwrap();
+
+    // External LED on breadboard: D49 (CN10 pin 10) = PG2
+    let led_external = Output::new(p.PG2, Level::Low, Speed::Low);
+    spawner.spawn(blink_led_external(led_external)).unwrap();
+
+    // I2C1 for BMP388 on ZIO connector CN7:
+    //   D15 (pin 2) = I2C_A_SCL = PB8
+    //   D14 (pin 4) = I2C_A_SDA = PB9
+    let mut i2c_config = I2cConfig::default();
+    i2c_config.scl_pullup = true;
+    i2c_config.sda_pullup = true;
+    let i2c = I2c::new(
+        p.I2C1, p.PB8, p.PB9, Irqs, p.DMA1_CH0, p.DMA1_CH1, i2c_config,
+    );
+    spawner.spawn(read_barometer(i2c)).unwrap();
+
+    info!("Init complete!");
+
+    loop {
         Timer::after(Duration::from_millis(5_000)).await;
     }
 }
