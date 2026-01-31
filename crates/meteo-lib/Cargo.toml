@@ -1,0 +1,16 @@
+[package]
+name = "meteo-lib"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+embedded-hal-async = { workspace = true }
+
+[dev-dependencies]
+test-log = { workspace = true }
+env_logger = { workspace = true }
+
+[lints]
+workspace = true

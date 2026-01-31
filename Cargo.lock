@@ -741,7 +741,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 
 [[package]]
-name = "meteo_station"
+name = "meteo-firmware"
 version = "0.1.0"
 dependencies = [
  "cortex-m",
@@ -752,9 +752,16 @@ dependencies = [
  "embassy-stm32",
  "embassy-sync",
  "embassy-time",
+ "meteo-lib",
+ "panic-probe",
+]
+
+[[package]]
+name = "meteo-lib"
+version = "0.1.0"
+dependencies = [
  "embedded-hal-async",
  "env_logger",
- "panic-probe",
  "test-log",
 ]
 

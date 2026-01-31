@@ -9,8 +9,8 @@ use embassy_stm32::i2c::{Config as I2cConfig, I2c};
 use embassy_stm32::mode::Async;
 use embassy_stm32::{bind_interrupts, peripherals};
 use embassy_time::{Duration, Timer};
-use meteo_station::bmp388::Bmp388;
-use meteo_station::trunc2;
+use meteo_lib::bmp388::Bmp388;
+use meteo_lib::trunc2;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {

@@ -1,7 +1,3 @@
-#![no_std]
-
-pub mod bmp388;
-
 /// Truncates a floating-point value to 2 decimal places.
 ///
 /// # Arguments

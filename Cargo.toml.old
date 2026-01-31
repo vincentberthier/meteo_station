@@ -1,21 +1,16 @@
-[workspace]
-members = [
-    "crates/meteo-lib",
-    "crates/meteo-firmware",
-]
-resolver = "2"
-
-[workspace.package]
+[package]
+name = "meteo_station"
 version = "0.1.0"
 authors = ["Vincent Berthier <vincent.berthier@posteo.org>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
-[workspace.dependencies]
+[dependencies]
 # Library dependencies (platform-agnostic)
 embedded-hal-async = "1.0"
 
 # Target-specific dependencies (embedded only)
+[target.'cfg(target_arch = "arm")'.dependencies]
 cortex-m = { version = "0.7.7", features = ["inline-asm", "critical-section-single-core"] }
 cortex-m-rt = "0.7.5"
 defmt = "1.0"
@@ -26,12 +21,9 @@ embassy-sync = { version = "0.7", features = ["defmt"] }
 embassy-time = { version = "0.5", features = ["defmt", "generic-queue-8"] }
 panic-probe = { version = "1.0", features = ["print-defmt"] }
 
-# Dev dependencies
+[dev-dependencies]
 test-log = "0.2"
 env_logger = "0.11"
-
-# Workspace members
-meteo-lib = { path = "crates/meteo-lib" }
 
 [profile.release]
 debug = true
