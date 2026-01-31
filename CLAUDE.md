@@ -4,8 +4,9 @@
 Weather station firmware - embedded Rust for a meteorological monitoring device targeting the STM32H753ZI (Nucleo-144 board). Uses the Embassy async runtime for bare-metal embedded development (`no_std`).
 
 Currently supports:
-- BMP388 barometric pressure/temperature sensor (via I2C)
+- BMP388 barometric pressure/temperature sensor (via I2C1)
 - LED indicators (onboard and external)
+- RN4871 BLE module (via USART2, planned)
 
 ## Build Commands
 
@@ -39,15 +40,23 @@ Uses Embassy's `#[embassy_executor::task]` for concurrent tasks. All peripherals
 
 ### Module Structure
 ```
-src/
-├── main.rs      # Binary: hardware init, interrupt bindings, task spawning
-├── lib.rs       # Library root: re-exports sensor drivers
-└── bmp388.rs    # BMP388 pressure/temperature sensor driver (hardware-agnostic)
+crates/
+├── meteo-firmware/        # Binary crate: STM32H753ZI-specific
+│   ├── build.rs
+│   └── src/
+│       └── main.rs        # Hardware init, interrupt bindings, task spawning
+└── meteo-lib/             # Library crate: hardware-agnostic
+    └── src/
+        ├── lib.rs         # Re-exports sensor drivers and utilities
+        ├── utils.rs       # Utility functions (trunc2, etc.)
+        └── sensors/
+            ├── mod.rs     # Sensor module root
+            └── bmp388.rs  # BMP388 pressure/temperature driver
 ```
 
 **Library vs Binary separation:**
-- `lib.rs` + sensor modules: Hardware-agnostic drivers using `embedded-hal-async` traits
-- `main.rs`: STM32H753ZI-specific hardware initialization and Embassy tasks
+- `meteo-lib`: Hardware-agnostic drivers using `embedded-hal-async` traits
+- `meteo-firmware`: STM32H753ZI-specific hardware initialization and Embassy tasks
 
 ### Static Resource Pattern
 Hardware resources use `StaticCell<Mutex<...>>` for safe sharing between tasks:
@@ -60,7 +69,23 @@ Primary: STM32H753ZI (`thumbv7em-none-eabihf`)
 
 ## Hardware
 
-All hardware datasheets are in `datasheets/`. For pin configuration, use `datasheets/um2407-stm32h7-nucleo144-boards-mb1364-stmicroelectronics.pdf` (pinout: pages 40-42).
+All hardware datasheets are in `datasheets/`. Pin reference: `datasheets/nucleo_pins.csv`.
+
+### Pin Allocation
+
+| Function             | STM32 Pin | Connector         | Label       | Peripheral |
+|----------------------|-----------|-------------------|-------------|------------|
+| LED green (LD1)      | PB0       | CN10 pin 31 (D33) | TIM_D_PWM1  | GPIO       |
+| LED yellow (LD2)     | PE1       | onboard           | -           | GPIO       |
+| LED red (LD3)        | PB14      | onboard           | -           | GPIO       |
+| External LED         | PG2       | CN8 pin 14 (D49)  | I/O         | GPIO       |
+| I2C1_SCL (BMP388)    | PB8       | CN7 pin 2 (D15)   | I2C_A_SCL   | I2C1       |
+| I2C1_SDA (BMP388)    | PB9       | CN7 pin 4 (D14)   | I2C_A_SDA   | I2C1       |
+| USART2_TX (RN4871)   | PD5       | CN9 pin 6 (D53)   | USART_B_TX  | USART2     |
+| USART2_RX (RN4871)   | PD6       | CN9 pin 4 (D52)   | USART_B_RX  | USART2     |
+| USART2_RTS (RN4871)  | PD4       | CN9 pin 8 (D54)   | USART_B_RTS | USART2     |
+| USART2_CTS (RN4871)  | PD3       | CN9 pin 10 (D55)  | USART_B_CTS | USART2     |
+| BLE RST_N (RN4871)   | PA4       | CN7 pin 17 (D24)  | SPI_B_NSS   | GPIO       |
 
 ## Code Standards
 

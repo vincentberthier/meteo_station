@@ -95,7 +95,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(blink_led_green(led_green)).unwrap();
     spawner.spawn(blink_led_yellow(led_yellow)).unwrap();
 
-    // External LED on breadboard: D49 (CN10 pin 10) = PG2
+    // External LED on breadboard: D49 (CN8 pin 14) = PG2
     let led_external = Output::new(p.PG2, Level::Low, Speed::Low);
     spawner.spawn(blink_led_external(led_external)).unwrap();
 
