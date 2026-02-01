@@ -10,7 +10,7 @@ use embassy_stm32::mode::Async;
 use embassy_stm32::usart::{BufferedUart, Config as UsartConfig};
 use embassy_stm32::{bind_interrupts, peripherals};
 use embassy_time::{Duration, Timer};
-use meteo_lib::ble::{LineBuffer, Rn4871, Uart as BleUart, parse_status_event};
+use meteo_lib::ble::{Command, LineBuffer, Rn4871, Uart as BleUart, parse_status_event};
 use meteo_lib::bmp388::Bmp388;
 use meteo_lib::trunc2;
 use static_cell::StaticCell;
@@ -147,7 +147,7 @@ async fn ble_task(uart: BufferedUart<'static>, mut rst_n: Output<'static>) {
     debug!("BLE: entered command mode");
 
     // Query and log firmware version
-    match ble.send_query(b"V", &mut buf).await {
+    match ble.query(Command::GetFirmwareVersion, &mut buf).await {
         Ok(n) => debug!(
             "BLE firmware: {}",
             core::str::from_utf8(&buf[..n]).unwrap_or("?")
@@ -156,7 +156,7 @@ async fn ble_task(uart: BufferedUart<'static>, mut rst_n: Output<'static>) {
     }
 
     // Query and log device name
-    match ble.send_query(b"GN", &mut buf).await {
+    match ble.query(Command::GetDeviceName, &mut buf).await {
         Ok(n) => debug!(
             "BLE device name: {}",
             core::str::from_utf8(&buf[..n]).unwrap_or("?")
@@ -166,7 +166,7 @@ async fn ble_task(uart: BufferedUart<'static>, mut rst_n: Output<'static>) {
 
     // Dump full device configuration
     if let Err(e) = ble
-        .send_multiline_query(b"D", |line| {
+        .query_multiline(Command::DumpConfig, |line| {
             debug!("BLE config: {}", core::str::from_utf8(line).unwrap_or("?"));
         })
         .await
@@ -175,12 +175,12 @@ async fn ble_task(uart: BufferedUart<'static>, mut rst_n: Output<'static>) {
     }
 
     // Set device name to MeteoStation
-    if let Err(e) = ble.send_command(b"SN,MeteoStation").await {
+    if let Err(e) = ble.execute(Command::SetName("MeteoStation")).await {
         warn!("BLE: failed to set name: {:?}", Debug2Format(&e));
     }
 
     // Set features: enable auto-advertise on power up (bit 0x2000)
-    if let Err(e) = ble.send_command(b"SR,2000").await {
+    if let Err(e) = ble.execute(Command::SetFeatures(0x2000)).await {
         warn!("BLE: failed to set features: {:?}", Debug2Format(&e));
     }
 

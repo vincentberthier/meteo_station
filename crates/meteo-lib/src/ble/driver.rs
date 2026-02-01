@@ -12,7 +12,11 @@ use core::fmt;
 use core::future::Future;
 
 use super::line_buffer::LineBuffer;
+use super::rn4871::command::{Command, ResponseType};
 use super::rn4871::{parser, response::Response};
+
+/// Maximum size for the command wire-format buffer.
+const CMD_BUF_SIZE: usize = 64;
 
 /// UART buffer sizes.
 const LINE_BUF_SIZE: usize = 256;
@@ -28,6 +32,8 @@ pub enum Error<E> {
     CommandFailed,
     /// Expected a specific response but got something else.
     UnexpectedResponse,
+    /// The command's wire format exceeds the internal buffer size.
+    CommandTooLong,
 }
 
 impl<E: fmt::Debug> fmt::Display for Error<E> {
@@ -36,6 +42,7 @@ impl<E: fmt::Debug> fmt::Display for Error<E> {
             Self::Uart(e) => write!(f, "UART error: {e:?}"),
             Self::CommandFailed => write!(f, "command failed (ERR)"),
             Self::UnexpectedResponse => write!(f, "unexpected response"),
+            Self::CommandTooLong => write!(f, "command too long for buffer"),
         }
     }
 }
@@ -164,17 +171,88 @@ impl<U: Uart> Rn4871<U> {
         self.wait_for_marker(b"END").await
     }
 
-    /// Sends a command and waits for `AOK`.
+    /// Executes a command that expects `AOK` (e.g. `SetName`, `SetFeatures`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::CommandTooLong` if the command exceeds the internal
+    /// buffer, `Error::CommandFailed` on `ERR`, `Error::Uart` on I/O failure,
+    /// or `Error::UnexpectedResponse` for unexpected responses.
+    pub async fn execute(&mut self, command: Command<'_>) -> Result<(), Error<U::Error>> {
+        debug_assert_eq!(
+            command.response_type(),
+            ResponseType::Aok,
+            "execute() requires a command that expects AOK"
+        );
+        let mut cmd_buf = [0_u8; CMD_BUF_SIZE];
+        let n = command
+            .write_to(&mut cmd_buf)
+            .ok_or(Error::CommandTooLong)?;
+        self.send_command(&cmd_buf[..n]).await
+    }
+
+    /// Executes a query command and returns the first data line.
+    ///
+    /// Returns the number of bytes written to `response_buf`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::CommandTooLong` if the command exceeds the internal
+    /// buffer, `Error::Uart` on I/O failure, `Error::CommandFailed` on `ERR`,
+    /// or `Error::UnexpectedResponse` for unexpected responses.
+    pub async fn query(
+        &mut self,
+        command: Command<'_>,
+        response_buf: &mut [u8],
+    ) -> Result<usize, Error<U::Error>> {
+        debug_assert_eq!(
+            command.response_type(),
+            ResponseType::SingleLine,
+            "query() requires a command that expects SingleLine"
+        );
+        let mut cmd_buf = [0_u8; CMD_BUF_SIZE];
+        let n = command
+            .write_to(&mut cmd_buf)
+            .ok_or(Error::CommandTooLong)?;
+        self.send_query(&cmd_buf[..n], response_buf).await
+    }
+
+    /// Executes a multi-line query command and calls `f` for each data line.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::CommandTooLong` if the command exceeds the internal
+    /// buffer, `Error::Uart` on I/O failure, `Error::CommandFailed` on `ERR`,
+    /// or `Error::UnexpectedResponse` for unexpected responses.
+    pub async fn query_multiline<F: FnMut(&[u8])>(
+        &mut self,
+        command: Command<'_>,
+        f: F,
+    ) -> Result<(), Error<U::Error>> {
+        debug_assert_eq!(
+            command.response_type(),
+            ResponseType::MultiLine,
+            "query_multiline() requires a command that expects MultiLine"
+        );
+        let mut cmd_buf = [0_u8; CMD_BUF_SIZE];
+        let n = command
+            .write_to(&mut cmd_buf)
+            .ok_or(Error::CommandTooLong)?;
+        self.send_multiline_query(&cmd_buf[..n], f).await
+    }
+
+    /// Sends a raw command and waits for `AOK`.
     ///
     /// The command should NOT include the trailing `\r` — it is appended
-    /// automatically.
+    /// automatically. Prefer [`execute`](Self::execute) with a typed
+    /// [`Command`] instead.
     ///
     /// # Errors
     ///
     /// Returns `Error::CommandFailed` if the module responds with `ERR`,
     /// `Error::Uart` on I/O failure, or `Error::UnexpectedResponse` for
     /// other unexpected responses.
-    pub async fn send_command(&mut self, cmd: &[u8]) -> Result<(), Error<U::Error>> {
+    async fn send_command(&mut self, cmd: &[u8]) -> Result<(), Error<U::Error>> {
         self.uart.write(cmd).await.map_err(Error::Uart)?;
         self.uart.write(b"\r").await.map_err(Error::Uart)?;
         self.wait_for(ResponseKind::Aok).await?;
@@ -183,25 +261,10 @@ impl<U: Uart> Rn4871<U> {
         self.wait_for_marker(b"CMD>").await
     }
 
-    /// Sends a query command and returns the first data line in the provided buffer.
+    /// Sends a raw query command and returns the first data line.
     ///
-    /// Query commands (like `V`, `GN`, `D`) return data lines instead of `AOK`.
-    /// This method sends the command with a trailing `\r`, skips any `Data` lines
-    /// that exactly match the command (echo), and returns the first non-echo
-    /// `Data` line's content copied into `buf`.
-    ///
-    /// Returns the number of bytes written to `buf`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Uart` on I/O failure, `Error::CommandFailed` on `ERR`,
-    /// or `Error::UnexpectedResponse` if a non-Data, non-echo response is received
-    /// before any data line.
-    pub async fn send_query(
-        &mut self,
-        cmd: &[u8],
-        buf: &mut [u8],
-    ) -> Result<usize, Error<U::Error>> {
+    /// Prefer [`query`](Self::query) with a typed [`Command`] instead.
+    async fn send_query(&mut self, cmd: &[u8], buf: &mut [u8]) -> Result<usize, Error<U::Error>> {
         self.uart.write(cmd).await.map_err(Error::Uart)?;
         self.uart.write(b"\r").await.map_err(Error::Uart)?;
 
@@ -241,19 +304,11 @@ impl<U: Uart> Rn4871<U> {
         }
     }
 
-    /// Sends a query command and calls `f` for each data line in the response.
+    /// Sends a raw multi-line query command and calls `f` for each data line.
     ///
-    /// Multi-line query commands (like `D`) return several data lines before
-    /// the module re-sends the `CMD>` prompt. This method sends the command
-    /// with a trailing `\r`, skips any echo of the command itself, and calls
-    /// `f` with each non-echo data line. Processing stops when the `CMD>`
-    /// prompt is consumed.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Uart` on I/O failure, `Error::CommandFailed` on `ERR`,
-    /// or `Error::UnexpectedResponse` for unexpected responses.
-    pub async fn send_multiline_query<F: FnMut(&[u8])>(
+    /// Prefer [`query_multiline`](Self::query_multiline) with a typed
+    /// [`Command`] instead.
+    async fn send_multiline_query<F: FnMut(&[u8])>(
         &mut self,
         cmd: &[u8],
         mut f: F,
@@ -506,32 +561,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_command_appends_cr() -> TestResult {
+    async fn execute_set_name_sends_correct_bytes() -> TestResult {
         // Given: AOK followed by CMD> prompt (real RN4871 behavior)
         let mock = MockUart::new(&[b"AOK\r\nCMD> "]);
         let mut driver = Rn4871::new(mock);
 
         // When
-        let result = driver.send_command(b"SN,MeteoStation").await;
+        let result = driver.execute(Command::SetName("MeteoStation")).await;
 
         // Then
         assert!(result.is_ok(), "should succeed on AOK");
         assert_eq!(
             driver.uart.written_bytes(),
             b"SN,MeteoStation\r",
-            "should append CR to command"
+            "should send SN,MeteoStation with CR"
         );
         Ok(())
     }
 
     #[tokio::test]
-    async fn send_command_returns_error_on_err_response() -> TestResult {
+    async fn execute_returns_error_on_err_response() -> TestResult {
         // Given
         let mock = MockUart::new(&[b"ERR\r\n"]);
         let mut driver = Rn4871::new(mock);
 
         // When
-        let result = driver.send_command(b"INVALID").await;
+        let result = driver.execute(Command::SetFeatures(0x2000)).await;
 
         // Then
         assert_eq!(
@@ -543,13 +598,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_command_skips_echo_before_aok() -> TestResult {
+    async fn execute_skips_echo_before_aok() -> TestResult {
         // Given: module echoes the command before responding, then re-sends CMD>
         let mock = MockUart::new(&[b"SN,MeteoStation\r\nAOK\r\nCMD> "]);
         let mut driver = Rn4871::new(mock);
 
         // When
-        let result = driver.send_command(b"SN,MeteoStation").await;
+        let result = driver.execute(Command::SetName("MeteoStation")).await;
 
         // Then
         assert!(result.is_ok(), "should skip echo (Data) and succeed on AOK");
@@ -597,7 +652,7 @@ mod tests {
 
         // When
         driver.enter_command_mode().await?;
-        driver.send_command(b"SN,Test").await?;
+        driver.execute(Command::SetName("Test")).await?;
         driver.exit_command_mode().await?;
 
         // Then
@@ -610,14 +665,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_query_returns_data_line() -> TestResult {
+    async fn query_firmware_version_returns_data_line() -> TestResult {
         // Given: V command returns firmware version, then CMD> prompt
         let mock = MockUart::new(&[b"RN4871 V1.40 7/9/2019\r\nCMD> "]);
         let mut driver = Rn4871::new(mock);
         let mut buf = [0_u8; 64];
 
         // When
-        let n = driver.send_query(b"V", &mut buf).await?;
+        let n = driver.query(Command::GetFirmwareVersion, &mut buf).await?;
 
         // Then
         assert_eq!(
@@ -629,14 +684,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_query_skips_echo() -> TestResult {
+    async fn query_device_name_skips_echo() -> TestResult {
         // Given: module echoes the command before the response, then CMD> prompt
         let mock = MockUart::new(&[b"GN\r\nRN4871-1234\r\nCMD> "]);
         let mut driver = Rn4871::new(mock);
         let mut buf = [0_u8; 64];
 
         // When
-        let n = driver.send_query(b"GN", &mut buf).await?;
+        let n = driver.query(Command::GetDeviceName, &mut buf).await?;
 
         // Then
         assert_eq!(
@@ -729,10 +784,10 @@ mod tests {
         let mut buf = [0_u8; 64];
 
         // When
-        let n1 = driver.send_query(b"V", &mut buf).await?;
+        let n1 = driver.query(Command::GetFirmwareVersion, &mut buf).await?;
         let v: Vec<u8> = buf[..n1].to_vec();
 
-        let n2 = driver.send_query(b"GN", &mut buf).await?;
+        let n2 = driver.query(Command::GetDeviceName, &mut buf).await?;
 
         // Then
         assert_eq!(v, b"RN4871 V1.40", "first query should return version");
@@ -745,14 +800,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_query_returns_error_on_err() -> TestResult {
+    async fn query_returns_error_on_err() -> TestResult {
         // Given
         let mock = MockUart::new(&[b"ERR\r\n"]);
         let mut driver = Rn4871::new(mock);
         let mut buf = [0_u8; 64];
 
         // When
-        let result = driver.send_query(b"X", &mut buf).await;
+        let result = driver.query(Command::GetFirmwareVersion, &mut buf).await;
 
         // Then
         assert_eq!(
@@ -764,7 +819,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_multiline_query_collects_all_lines() -> TestResult {
+    async fn query_multiline_collects_all_lines() -> TestResult {
         // Given: D command returns multiple config lines then CMD>
         let mock =
             MockUart::new(&[b"BTA=AABBCCDDEEFF\r\nName=MeteoStation\r\nConnected=no\r\nCMD> "]);
@@ -773,7 +828,7 @@ mod tests {
 
         // When
         driver
-            .send_multiline_query(b"D", |line| lines.push(line.to_vec()))
+            .query_multiline(Command::DumpConfig, |line| lines.push(line.to_vec()))
             .await?;
 
         // Then
@@ -785,7 +840,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_multiline_query_skips_echo() -> TestResult {
+    async fn query_multiline_skips_echo() -> TestResult {
         // Given: module echoes the command before response
         let mock = MockUart::new(&[b"D\r\nBTA=AABBCCDDEEFF\r\nCMD> "]);
         let mut driver = Rn4871::new(mock);
@@ -793,7 +848,7 @@ mod tests {
 
         // When
         driver
-            .send_multiline_query(b"D", |line| lines.push(line.to_vec()))
+            .query_multiline(Command::DumpConfig, |line| lines.push(line.to_vec()))
             .await?;
 
         // Then
@@ -803,7 +858,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_multiline_query_across_chunks() -> TestResult {
+    async fn query_multiline_across_chunks() -> TestResult {
         // Given: response split across multiple reads
         let mock = MockUart::new(&[b"BTA=AABB\r\n", b"Name=Test\r\n", b"CMD> "]);
         let mut driver = Rn4871::new(mock);
@@ -811,7 +866,7 @@ mod tests {
 
         // When
         driver
-            .send_multiline_query(b"D", |line| lines.push(line.to_vec()))
+            .query_multiline(Command::DumpConfig, |line| lines.push(line.to_vec()))
             .await?;
 
         // Then
