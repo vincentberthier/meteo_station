@@ -7,19 +7,42 @@ use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::i2c::Master;
 use embassy_stm32::i2c::{Config as I2cConfig, I2c};
 use embassy_stm32::mode::Async;
-use embassy_stm32::usart::{Config as UsartConfig, UartRx};
+use embassy_stm32::usart::{BufferedUart, Config as UsartConfig};
 use embassy_stm32::{bind_interrupts, peripherals};
 use embassy_time::{Duration, Timer};
-use meteo_lib::ble::{self, LineBuffer};
+use meteo_lib::ble::{self, LineBuffer, Rn4871, Uart as BleUart};
 use meteo_lib::bmp388::Bmp388;
 use meteo_lib::trunc2;
+use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
     I2C1_EV => embassy_stm32::i2c::EventInterruptHandler<peripherals::I2C1>;
     I2C1_ER => embassy_stm32::i2c::ErrorInterruptHandler<peripherals::I2C1>;
-    USART2 => embassy_stm32::usart::InterruptHandler<peripherals::USART2>;
 });
+
+bind_interrupts!(struct UsartIrqs {
+    USART2 => embassy_stm32::usart::BufferedInterruptHandler<peripherals::USART2>;
+});
+
+/// Adapter wrapping Embassy's [`BufferedUart`] to implement [`BleUart`].
+struct EmbassyUart {
+    inner: BufferedUart<'static>,
+}
+
+impl BleUart for EmbassyUart {
+    type Error = embassy_stm32::usart::Error;
+
+    async fn write(&mut self, data: &[u8]) -> Result<(), Self::Error> {
+        use embedded_io_async::Write as _;
+        self.inner.write_all(data).await
+    }
+
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        use embedded_io_async::Read as _;
+        self.inner.read(buf).await
+    }
+}
 
 #[embassy_executor::task]
 async fn blink_led_green(mut led: Output<'static>) {
@@ -87,21 +110,104 @@ async fn read_barometer(i2c: I2c<'static, Async, Master>) {
     }
 }
 
-/// BLE UART debug task: reads bytes from the RN4871, frames lines, parses and logs them.
+/// Extracts and logs all `%...%` status events from the line buffer.
+fn process_status_events(line_buf: &mut LineBuffer<256>) {
+    while line_buf.process_status_event(|event| {
+        let response = ble::parse(event);
+        debug!("BLE status: {:?}", response);
+    }) {}
+}
+
+/// BLE task: configures the RN4871 as "MeteoStation" and monitors messages.
 #[embassy_executor::task]
-async fn ble_debug(mut rx: UartRx<'static, Async>) {
+async fn ble_task(uart: BufferedUart<'static>, mut rst_n: Output<'static>) {
+    let adapter = EmbassyUart { inner: uart };
+    let mut ble = Rn4871::new(adapter);
+    let mut buf = [0_u8; 64];
+
+    // Hardware reset to get a clean state
+    debug!("BLE: resetting module...");
+    rst_n.set_low();
+    Timer::after(Duration::from_millis(5)).await;
+    rst_n.set_high();
+
+    // Wait for reboot message
+    if let Err(e) = ble.wait_for_reboot().await {
+        error!("BLE: failed to detect reboot: {:?}", Debug2Format(&e));
+        return;
+    }
+    debug!("BLE: module rebooted");
+
+    // Enter command mode
+    debug!("BLE: sending $$$ to enter command mode...");
+    if let Err(e) = ble.enter_command_mode().await {
+        error!("BLE: failed to enter command mode: {:?}", Debug2Format(&e));
+        return;
+    }
+    debug!("BLE: entered command mode");
+
+    // Query and log firmware version
+    match ble.send_query(b"V", &mut buf).await {
+        Ok(n) => debug!(
+            "BLE firmware: {}",
+            core::str::from_utf8(&buf[..n]).unwrap_or("?")
+        ),
+        Err(e) => warn!("BLE: failed to query version: {:?}", Debug2Format(&e)),
+    }
+
+    // Query and log device name
+    match ble.send_query(b"GN", &mut buf).await {
+        Ok(n) => debug!(
+            "BLE device name: {}",
+            core::str::from_utf8(&buf[..n]).unwrap_or("?")
+        ),
+        Err(e) => warn!("BLE: failed to query name: {:?}", Debug2Format(&e)),
+    }
+
+    // Dump full device configuration
+    if let Err(e) = ble
+        .send_multiline_query(b"D", |line| {
+            debug!("BLE config: {}", core::str::from_utf8(line).unwrap_or("?"));
+        })
+        .await
+    {
+        warn!("BLE: failed to query config: {:?}", Debug2Format(&e));
+    }
+
+    // Set device name to MeteoStation
+    if let Err(e) = ble.send_command(b"SN,MeteoStation").await {
+        warn!("BLE: failed to set name: {:?}", Debug2Format(&e));
+    }
+
+    // Set features: enable auto-advertise on power up (bit 0x2000)
+    if let Err(e) = ble.send_command(b"SR,2000").await {
+        warn!("BLE: failed to set features: {:?}", Debug2Format(&e));
+    }
+
+    // Exit command mode (module starts advertising automatically)
+    if let Err(e) = ble.exit_command_mode().await {
+        error!("BLE: failed to exit command mode: {:?}", Debug2Format(&e));
+        return;
+    }
+    info!("BLE: configured as MeteoStation, now advertising");
+
+    // Monitor incoming BLE messages using the driver's UART adapter.
+    // Status events (%CONNECT%, %DISCONNECT%, etc.) may not be followed
+    // by \r\n on this firmware version, so we scan the raw buffer for
+    // %...% patterns in addition to line-framed responses.
     let mut line_buf = LineBuffer::<256>::new();
     let mut rx_buf = [0_u8; 64];
-
-    debug!("BLE debug task started, listening on USART2");
-
+    let uart = ble.uart_mut();
     loop {
-        match rx.read_until_idle(&mut rx_buf).await {
+        match uart.read(&mut rx_buf).await {
             Ok(n) => {
                 line_buf.push_bytes(&rx_buf[..n]);
+                // First, try to extract %...% status events from the raw buffer
+                process_status_events(&mut line_buf);
+                // Then, process any line-framed responses
                 line_buf.for_each_line(|line| {
                     let response = ble::parse(line);
-                    debug!("BLE: {:?}", response);
+                    debug!("BLE event: {:?}", response);
                 });
             }
             Err(e) => {
@@ -137,12 +243,27 @@ async fn main(spawner: Spawner) {
     );
     spawner.spawn(read_barometer(i2c)).unwrap();
 
-    // USART2 for RN4871 BLE module on ZIO connector CN9:
-    //   D53 (pin 6) = USART_B_TX = PD5
-    //   D52 (pin 4) = USART_B_RX = PD6
+    // USART2 for RN4871 BLE module (buffered, interrupt-driven):
+    //   D53 (pin 6)  = USART_B_TX  = PD5
+    //   D52 (pin 4)  = USART_B_RX  = PD6
+    // RST_N on D24 (CN7 pin 17) = PA4
     let usart_config = UsartConfig::default(); // 115200 8N1
-    let uart_rx = UartRx::new(p.USART2, Irqs, p.PD6, p.DMA1_CH2, usart_config).unwrap();
-    spawner.spawn(ble_debug(uart_rx)).unwrap();
+    static TX_BUF: StaticCell<[u8; 256]> = StaticCell::new();
+    static RX_BUF: StaticCell<[u8; 256]> = StaticCell::new();
+    let tx_buf = TX_BUF.init([0_u8; 256]);
+    let rx_buf = RX_BUF.init([0_u8; 256]);
+    let uart = BufferedUart::new(
+        p.USART2,
+        p.PD6,
+        p.PD5,
+        tx_buf,
+        rx_buf,
+        UsartIrqs,
+        usart_config,
+    )
+    .unwrap();
+    let ble_rst_n = Output::new(p.PA4, Level::High, Speed::Low);
+    spawner.spawn(ble_task(uart, ble_rst_n)).unwrap();
 
     info!("Init complete!");
 

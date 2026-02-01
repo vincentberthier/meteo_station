@@ -33,6 +33,23 @@ cargo make format
 cargo make size
 ```
 
+### Testing with probe-rs
+
+**CRITICAL:** When running `probe-rs run` for testing, NEVER let it be killed by timeout or SIGTERM. This leaves the debug probe locked and the chip halted, requiring a physical unplug/replug to recover.
+
+**Correct way to test firmware:**
+
+```bash
+# Run in background, let it run for a few seconds, then cleanly terminate
+probe-rs run --chip STM32H753ZITx target/thumbv7em-none-eabihf/release/meteo-firmware &
+PROBE_PID=$!
+sleep 5  # Let it run for 5 seconds (or more, adjust as needed)
+kill -INT $PROBE_PID  # Send SIGINT (Ctrl+C) for clean exit
+wait $PROBE_PID
+```
+
+This ensures probe-rs can cleanly detach from the debug probe before exiting.
+
 ## Architecture
 
 ### Async Runtime Pattern

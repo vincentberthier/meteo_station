@@ -1,43 +1,12 @@
-//! RN4871 BLE module response parser.
+//! RN4871 response parser.
 //!
-//! Parses individual lines received from the RN4871 UART into typed responses.
-//! The caller is responsible for line-level framing (reading until CR or `%...%`
-//! boundaries). This module only handles the parsing of complete lines.
+//! Parses individual lines or `%...%` delimited status events received from the
+//! RN4871 UART into typed [`Response`] values.
+
+use super::response::Response;
 
 /// Default status message delimiter used by the RN4871.
 const STATUS_DELIMITER: u8 = b'%';
-
-/// A parsed response from the RN4871 BLE module.
-///
-/// Each variant corresponds to a specific message type documented in the
-/// RN4870/71 User Guide (DS50002466C). The `Data` variant captures any
-/// unrecognized content, including intermediate lines of multi-line responses.
-#[derive(Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum Response<'a> {
-    /// Command acknowledged successfully (`AOK`).
-    Aok,
-    /// Command failed (`ERR`).
-    Err,
-    /// Command mode prompt (`CMD>` or `CMD`). Module is ready for commands.
-    Cmd,
-    /// Exited command mode (`END`). Module returned to data mode.
-    End,
-    /// Module has rebooted (`%REBOOT%`).
-    Reboot,
-    /// BLE connection established.
-    /// `address_type`: 0 = public, 1 = random.
-    /// `address`: ASCII hex MAC address (e.g. `b"AABBCCDDEEFF"`).
-    Connect { address_type: u8, address: &'a [u8] },
-    /// BLE connection lost (`%DISCONNECT%`).
-    Disconnect,
-    /// UART Transparent data pipe established (`%STREAM_OPEN%`).
-    StreamOpen,
-    /// Unrecognized or intermediate data. Captures multi-line response content
-    /// (e.g. individual lines from `LS`, `D`, `V` commands) as well as any
-    /// unknown messages.
-    Data(&'a [u8]),
-}
 
 /// Strips trailing CR (`\r`) and LF (`\n`) characters from a byte slice.
 #[expect(
@@ -58,6 +27,9 @@ fn parse_status_event(inner: &[u8]) -> Response<'_> {
         b"REBOOT" => Response::Reboot,
         b"DISCONNECT" => Response::Disconnect,
         b"STREAM_OPEN" => Response::StreamOpen,
+        _ if inner.starts_with(b"CONN_PARAM,") => {
+            Response::ConnParam(&inner[b"CONN_PARAM,".len()..])
+        }
         _ => parse_connect_event(inner),
     }
 }
@@ -359,6 +331,42 @@ mod tests {
                 address: b"112233445566",
             },
             "expected Connect with random address"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_conn_param_event() -> TestResult {
+        // Given
+        let line = b"%CONN_PARAM,0006,0000,01F4%";
+
+        // When
+        let response = parse(line);
+
+        // Then
+        assert_eq!(
+            response,
+            Response::ConnParam(b"0006,0000,01F4"),
+            "expected ConnParam with parameters"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_conn_param_different_values() -> TestResult {
+        // Given
+        let line = b"%CONN_PARAM,0018,0000,01F4%";
+
+        // When
+        let response = parse(line);
+
+        // Then
+        assert_eq!(
+            response,
+            Response::ConnParam(b"0018,0000,01F4"),
+            "expected ConnParam with different interval"
         );
 
         Ok(())

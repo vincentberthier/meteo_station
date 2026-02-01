@@ -113,6 +113,46 @@ impl<const N: usize> LineBuffer<N> {
         }
     }
 
+    /// Returns the current buffer contents as a byte slice.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8] {
+        // Can't use &self.buf[..self.len] in const context, so use split_at
+        self.buf.split_at(self.len).0
+    }
+
+    /// Discards all buffered data.
+    pub const fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    /// Returns `true` if the buffer contains at least one complete line.
+    ///
+    /// A complete line is any non-empty content followed by `\r` or `\n`,
+    /// or the buffer being full with no line ending.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "pos increments while pos < self.len"
+    )]
+    #[must_use]
+    pub const fn has_complete_line(&self) -> bool {
+        let start = self.skip_line_endings(0);
+        if start >= self.len {
+            return false;
+        }
+
+        // Check for a line ending after the non-empty content
+        let mut pos = start;
+        while pos < self.len {
+            if self.buf[pos] == b'\r' || self.buf[pos] == b'\n' {
+                return true;
+            }
+            pos += 1;
+        }
+
+        // Buffer full counts as a complete line
+        self.len >= N
+    }
+
     /// Processes at most one complete line from the buffer.
     ///
     /// If a complete line is available, calls `f` with the line content and
@@ -160,6 +200,43 @@ impl<const N: usize> LineBuffer<N> {
             }
             false
         }
+    }
+
+    /// Extracts at most one `%...%` status event from the buffer.
+    ///
+    /// Scans the buffer for content delimited by two `%` characters. If found,
+    /// calls `f` with the full event **including** the `%` delimiters (e.g.
+    /// `%DISCONNECT%`), removes it from the buffer, and returns `true`.
+    ///
+    /// This is needed because RN4871 status events like `%CONNECT,...%` and
+    /// `%DISCONNECT%` may not be followed by `\r\n` on some firmware versions,
+    /// so they cannot be extracted by line-based methods.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "index arithmetic is bounded by self.len"
+    )]
+    pub fn process_status_event<F: FnMut(&[u8])>(&mut self, mut f: F) -> bool {
+        // Find the first '%'
+        let mut start = None;
+        let mut i = 0;
+        while i < self.len {
+            if self.buf[i] == b'%' {
+                if let Some(event_start) = start {
+                    // Found the closing '%' — extract event including both delimiters
+                    let event_end = i + 1;
+                    f(&self.buf[event_start..event_end]);
+
+                    // Compact: remove the event from the buffer
+                    let remaining = self.len - event_end;
+                    self.buf.copy_within(event_end..self.len, event_start);
+                    self.len = event_start + remaining;
+                    return true;
+                }
+                start = Some(i);
+            }
+            i += 1;
+        }
+        false
     }
 
     /// Returns the position past any leading line-ending characters from `from`.
@@ -433,6 +510,109 @@ mod tests {
             vec![b"hello".to_vec(), b"world".to_vec()],
             "data should be preserved across pushes"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn process_status_event_extracts_disconnect() -> TestResult {
+        // Given
+        let mut buf = LineBuffer::<128>::new();
+        buf.push_bytes(b"%DISCONNECT%");
+
+        // When
+        let mut event = vec![];
+        let found = buf.process_status_event(|e| event = e.to_vec());
+
+        // Then
+        assert!(found, "should find status event");
+        assert_eq!(event, b"%DISCONNECT%", "should extract full event");
+        assert_eq!(
+            buf.as_bytes(),
+            b"",
+            "buffer should be empty after extraction"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn process_status_event_extracts_connect_with_address() -> TestResult {
+        // Given
+        let mut buf = LineBuffer::<128>::new();
+        buf.push_bytes(b"%CONNECT,1,AABBCCDDEEFF%");
+
+        // When
+        let mut event = vec![];
+        let found = buf.process_status_event(|e| event = e.to_vec());
+
+        // Then
+        assert!(found, "should find connect event");
+        assert_eq!(event, b"%CONNECT,1,AABBCCDDEEFF%");
+        Ok(())
+    }
+
+    #[test]
+    fn process_status_event_preserves_surrounding_data() -> TestResult {
+        // Given: status event with data before and after
+        let mut buf = LineBuffer::<128>::new();
+        buf.push_bytes(b"noise%DISCONNECT%more");
+
+        // When
+        let mut event = vec![];
+        let found = buf.process_status_event(|e| event = e.to_vec());
+
+        // Then
+        assert!(found, "should find event");
+        assert_eq!(event, b"%DISCONNECT%");
+        assert_eq!(
+            buf.as_bytes(),
+            b"noisemore",
+            "surrounding data should be preserved"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn process_status_event_returns_false_with_no_event() -> TestResult {
+        // Given
+        let mut buf = LineBuffer::<128>::new();
+        buf.push_bytes(b"no events here");
+
+        // When
+        let found = buf.process_status_event(|_| {});
+
+        // Then
+        assert!(!found, "should return false when no %...% event");
+        Ok(())
+    }
+
+    #[test]
+    fn process_status_event_returns_false_with_single_percent() -> TestResult {
+        // Given: only one % delimiter (incomplete event)
+        let mut buf = LineBuffer::<128>::new();
+        buf.push_bytes(b"%DISCONNECT");
+
+        // When
+        let found = buf.process_status_event(|_| {});
+
+        // Then
+        assert!(!found, "should return false with only opening %");
+        Ok(())
+    }
+
+    #[test]
+    fn process_status_event_multiple_events() -> TestResult {
+        // Given: two events in buffer
+        let mut buf = LineBuffer::<128>::new();
+        buf.push_bytes(b"%DISCONNECT%%CONNECT,0,112233445566%");
+
+        // When
+        let mut events = vec![];
+        while buf.process_status_event(|e| events.push(e.to_vec())) {}
+
+        // Then
+        assert_eq!(events.len(), 2, "should find two events");
+        assert_eq!(events[0], b"%DISCONNECT%");
+        assert_eq!(events[1], b"%CONNECT,0,112233445566%");
         Ok(())
     }
 }
