@@ -6,6 +6,10 @@
 //!
 //! Hardware reset (`RST_N` pin) is managed externally by the firmware task.
 //! After toggling reset, call [`Rn4871::wait_for_reboot`] to synchronize.
+#![allow(
+    clippy::missing_asserts_for_indexing,
+    reason = "false positive from defmt::Format derive (conditional on defmt feature)"
+)]
 
 use core::error;
 use core::fmt;
