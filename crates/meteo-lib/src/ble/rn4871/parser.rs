@@ -1,12 +1,10 @@
-//! RN4871 response parser.
+//! RN4871 command response parser.
 //!
-//! Parses individual lines or `%...%` delimited status events received from the
-//! RN4871 UART into typed [`Response`] values.
+//! Parses individual lines received from the RN4871 UART into typed
+//! [`Response`] values. Status events (`%...%`) are handled separately by
+//! [`status_parser`](super::status_parser).
 
 use super::response::Response;
-
-/// Default status message delimiter used by the RN4871.
-const STATUS_DELIMITER: u8 = b'%';
 
 /// Strips trailing CR (`\r`) and LF (`\n`) characters from a byte slice.
 #[expect(
@@ -21,66 +19,10 @@ fn strip_line_endings(input: &[u8]) -> &[u8] {
     &input[..end]
 }
 
-/// Parses the inner content of a `%...%` status message.
-fn parse_status_event(inner: &[u8]) -> Response<'_> {
-    match inner {
-        b"REBOOT" => Response::Reboot,
-        b"DISCONNECT" => Response::Disconnect,
-        b"STREAM_OPEN" => Response::StreamOpen,
-        _ if inner.starts_with(b"CONN_PARAM,") => {
-            Response::ConnParam(&inner[b"CONN_PARAM,".len()..])
-        }
-        _ => parse_connect_event(inner),
-    }
-}
-
-/// Attempts to parse a `CONNECT,<type>,<address>` status event.
-/// Returns `Data` if the format doesn't match.
-#[expect(
-    clippy::arithmetic_side_effects,
-    reason = "comma_pos < rest.len() so +1 won't overflow"
-)]
-fn parse_connect_event(inner: &[u8]) -> Response<'_> {
-    // Expected format: CONNECT,<addr_type>,<address>
-    let Some(rest) = inner.strip_prefix(b"CONNECT,") else {
-        return Response::Data(inner);
-    };
-
-    // Find the comma separating address_type from address
-    let Some(comma_pos) = rest.iter().position(|&b| b == b',') else {
-        return Response::Data(inner);
-    };
-
-    let type_byte = &rest[..comma_pos];
-    let address = &rest[comma_pos + 1..];
-
-    // Address type must be a single ASCII digit (0 or 1)
-    if type_byte.len() != 1 || address.is_empty() {
-        return Response::Data(inner);
-    }
-
-    let address_type = match type_byte[0] {
-        b'0' => 0_u8,
-        b'1' => 1_u8,
-        _ => return Response::Data(inner),
-    };
-
-    Response::Connect {
-        address_type,
-        address,
-    }
-}
-
 /// Parses a single line received from the RN4871 UART.
 ///
 /// The input should be a complete line as received from the module. Trailing
 /// CR/LF characters are stripped before parsing.
-///
-/// # Status events
-///
-/// Lines wrapped in `%` delimiters (e.g. `%REBOOT%`, `%CONNECT,0,AABB...%`)
-/// are parsed as status events. These can appear in both command mode and data
-/// mode.
 ///
 /// # Command responses
 ///
@@ -89,29 +31,18 @@ fn parse_connect_event(inner: &[u8]) -> Response<'_> {
 ///
 /// # Fallback
 ///
-/// Anything unrecognized is returned as [`Response::Data`], which also covers
+/// Anything unrecognized is returned as [`Response::Data`], which covers
 /// intermediate lines of multi-line responses (e.g. output from `LS`, `D`, `V`
 /// commands).
+///
+/// # Note
+///
+/// Status events (`%...%` delimited) are **not** parsed here. They are
+/// extracted from the raw buffer by [`LineBuffer::process_status_event`] and
+/// parsed by [`status_parser::parse`](super::status_parser::parse).
 #[must_use]
-#[expect(
-    clippy::arithmetic_side_effects,
-    reason = "len >= 2 guard prevents underflow"
-)]
 pub fn parse(line: &[u8]) -> Response<'_> {
     let trimmed = strip_line_endings(line);
-
-    if trimmed.is_empty() {
-        return Response::Data(trimmed);
-    }
-
-    // Check for status events: %...%
-    if trimmed[0] == STATUS_DELIMITER
-        && trimmed.len() >= 2
-        && trimmed[trimmed.len() - 1] == STATUS_DELIMITER
-    {
-        let inner = &trimmed[1..trimmed.len() - 1];
-        return parse_status_event(inner);
-    }
 
     // Check for command responses
     match trimmed {
@@ -250,128 +181,6 @@ mod tests {
         Ok(())
     }
 
-    // --- Status event tests ---
-
-    #[test]
-    fn parse_reboot_event() -> TestResult {
-        // Given
-        let line = b"%REBOOT%";
-
-        // When
-        let response = parse(line);
-
-        // Then
-        assert_eq!(response, Response::Reboot, "expected Reboot event");
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_disconnect_event() -> TestResult {
-        // Given
-        let line = b"%DISCONNECT%";
-
-        // When
-        let response = parse(line);
-
-        // Then
-        assert_eq!(response, Response::Disconnect, "expected Disconnect event");
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_stream_open_event() -> TestResult {
-        // Given
-        let line = b"%STREAM_OPEN%";
-
-        // When
-        let response = parse(line);
-
-        // Then
-        assert_eq!(response, Response::StreamOpen, "expected StreamOpen event");
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_connect_public_address() -> TestResult {
-        // Given
-        let line = b"%CONNECT,0,AABBCCDDEEFF%";
-
-        // When
-        let response = parse(line);
-
-        // Then
-        assert_eq!(
-            response,
-            Response::Connect {
-                address_type: 0,
-                address: b"AABBCCDDEEFF",
-            },
-            "expected Connect with public address"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_connect_random_address() -> TestResult {
-        // Given
-        let line = b"%CONNECT,1,112233445566%";
-
-        // When
-        let response = parse(line);
-
-        // Then
-        assert_eq!(
-            response,
-            Response::Connect {
-                address_type: 1,
-                address: b"112233445566",
-            },
-            "expected Connect with random address"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_conn_param_event() -> TestResult {
-        // Given
-        let line = b"%CONN_PARAM,0006,0000,01F4%";
-
-        // When
-        let response = parse(line);
-
-        // Then
-        assert_eq!(
-            response,
-            Response::ConnParam(b"0006,0000,01F4"),
-            "expected ConnParam with parameters"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_conn_param_different_values() -> TestResult {
-        // Given
-        let line = b"%CONN_PARAM,0018,0000,01F4%";
-
-        // When
-        let response = parse(line);
-
-        // Then
-        assert_eq!(
-            response,
-            Response::ConnParam(b"0018,0000,01F4"),
-            "expected ConnParam with different interval"
-        );
-
-        Ok(())
-    }
-
     // --- Data / fallback tests ---
 
     #[test]
@@ -425,9 +234,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_unknown_status_event_returns_data() -> TestResult {
-        // Given
-        let line = b"%UNKNOWN_EVENT%";
+    fn parse_status_event_syntax_returns_data() -> TestResult {
+        // Given — %...% lines are no longer parsed here; they pass through as Data
+        let line = b"%REBOOT%";
 
         // When
         let response = parse(line);
@@ -435,98 +244,8 @@ mod tests {
         // Then
         assert_eq!(
             response,
-            Response::Data(b"UNKNOWN_EVENT"),
-            "expected Data for unknown status event"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_connect_missing_address_returns_data() -> TestResult {
-        // Given — malformed: no address after type
-        let line = b"%CONNECT,0,%";
-
-        // When
-        let response = parse(line);
-
-        // Then
-        assert_eq!(
-            response,
-            Response::Data(b"CONNECT,0,"),
-            "expected Data for malformed CONNECT with empty address"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_connect_missing_comma_returns_data() -> TestResult {
-        // Given — malformed: no comma after CONNECT
-        let line = b"%CONNECT%";
-
-        // When
-        let response = parse(line);
-
-        // Then
-        assert_eq!(
-            response,
-            Response::Data(b"CONNECT"),
-            "expected Data for CONNECT without parameters"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_connect_invalid_type_returns_data() -> TestResult {
-        // Given — address type is not 0 or 1
-        let line = b"%CONNECT,2,AABBCCDDEEFF%";
-
-        // When
-        let response = parse(line);
-
-        // Then
-        assert_eq!(
-            response,
-            Response::Data(b"CONNECT,2,AABBCCDDEEFF"),
-            "expected Data for invalid address type"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_single_percent_returns_data() -> TestResult {
-        // Given
-        let line = b"%";
-
-        // When
-        let response = parse(line);
-
-        // Then
-        assert_eq!(
-            response,
-            Response::Data(b"%"),
-            "expected Data for lone percent sign"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_reboot_with_trailing_cr() -> TestResult {
-        // Given — status event followed by CR (common from UART)
-        let line = b"%REBOOT%\r";
-
-        // When
-        let response = parse(line);
-
-        // Then — trailing CR is stripped, then %REBOOT% is parsed normally
-        assert_eq!(
-            response,
-            Response::Reboot,
-            "trailing CR should be stripped before parsing"
+            Response::Data(b"%REBOOT%"),
+            "status events are not parsed by the command response parser"
         );
 
         Ok(())

@@ -12,7 +12,7 @@ use core::fmt;
 use core::future::Future;
 
 use super::line_buffer::LineBuffer;
-use super::rn4871::{self, Response};
+use super::rn4871::{parser, response::Response};
 
 /// UART buffer sizes.
 const LINE_BUF_SIZE: usize = 256;
@@ -69,11 +69,6 @@ enum ResponseKind {
     Err,
     Cmd,
     End,
-    Reboot,
-    Connect,
-    ConnParam,
-    Disconnect,
-    StreamOpen,
     Data,
 }
 
@@ -85,11 +80,6 @@ impl ResponseKind {
             Response::Err => Self::Err,
             Response::Cmd => Self::Cmd,
             Response::End => Self::End,
-            Response::Reboot => Self::Reboot,
-            Response::Connect { .. } => Self::Connect,
-            Response::ConnParam(_) => Self::ConnParam,
-            Response::Disconnect => Self::Disconnect,
-            Response::StreamOpen => Self::StreamOpen,
             Response::Data(_) => Self::Data,
         }
     }
@@ -220,7 +210,7 @@ impl<U: Uart> Rn4871<U> {
 
             self.ensure_line_available().await?;
             self.line_buf.process_line(|line| {
-                let response = rn4871::parse(line);
+                let response = parser::parse(line);
                 match response {
                     Response::Data(data) => {
                         // Skip echo of the command itself
@@ -280,7 +270,7 @@ impl<U: Uart> Rn4871<U> {
                 let mut result: Option<Result<(), Error<U::Error>>> = None;
                 self.line_buf.process_line(|line| {
                     had_line = true;
-                    let response = rn4871::parse(line);
+                    let response = parser::parse(line);
                     match response {
                         Response::Data(line_data) => {
                             if line_data != cmd {
@@ -340,7 +330,7 @@ impl<U: Uart> Rn4871<U> {
             // Try to extract a single line from buffered data
             let mut kind = None;
             self.line_buf.process_line(|line| {
-                let response = rn4871::parse(line);
+                let response = parser::parse(line);
                 kind = Some(ResponseKind::from_response(&response));
             });
 

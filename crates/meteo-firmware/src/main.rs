@@ -10,7 +10,7 @@ use embassy_stm32::mode::Async;
 use embassy_stm32::usart::{BufferedUart, Config as UsartConfig};
 use embassy_stm32::{bind_interrupts, peripherals};
 use embassy_time::{Duration, Timer};
-use meteo_lib::ble::{self, LineBuffer, Rn4871, Uart as BleUart};
+use meteo_lib::ble::{LineBuffer, Rn4871, Uart as BleUart, parse_status_event};
 use meteo_lib::bmp388::Bmp388;
 use meteo_lib::trunc2;
 use static_cell::StaticCell;
@@ -113,8 +113,8 @@ async fn read_barometer(i2c: I2c<'static, Async, Master>) {
 /// Extracts and logs all `%...%` status events from the line buffer.
 fn process_status_events(line_buf: &mut LineBuffer<256>) {
     while line_buf.process_status_event(|event| {
-        let response = ble::parse(event);
-        debug!("BLE status: {:?}", response);
+        let status = parse_status_event(event);
+        debug!("BLE status: {:?}", status);
     }) {}
 }
 
@@ -202,13 +202,10 @@ async fn ble_task(uart: BufferedUart<'static>, mut rst_n: Output<'static>) {
         match uart.read(&mut rx_buf).await {
             Ok(n) => {
                 line_buf.push_bytes(&rx_buf[..n]);
-                // First, try to extract %...% status events from the raw buffer
+                // Extract %...% status events from the raw buffer
                 process_status_events(&mut line_buf);
-                // Then, process any line-framed responses
-                line_buf.for_each_line(|line| {
-                    let response = ble::parse(line);
-                    debug!("BLE event: {:?}", response);
-                });
+                // Drain any remaining line-framed data to keep buffer clean
+                line_buf.for_each_line(|_line| {});
             }
             Err(e) => {
                 warn!("BLE UART read error: {:?}", Debug2Format(&e));

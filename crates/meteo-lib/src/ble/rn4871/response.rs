@@ -1,13 +1,15 @@
-//! RN4871 response type definitions.
+//! RN4871 command response type definitions.
 //!
-//! Defines the [`Response`] enum representing all known message types from the
-//! RN4871 BLE module, as documented in the RN4870/71 User Guide (DS50002466C).
+//! Defines the [`Response`] enum representing command-mode responses from the
+//! RN4871 BLE module. These are protocol-level responses to commands and are
+//! internal to the driver — callers interact with [`StatusEvent`](super::status_event::StatusEvent)
+//! for unsolicited events.
 
-/// A parsed response from the RN4871 BLE module.
+/// A parsed command response from the RN4871 BLE module.
 ///
-/// Each variant corresponds to a specific message type. The `Data` variant
-/// captures any unrecognized content, including intermediate lines of
-/// multi-line responses.
+/// These variants represent protocol mechanics: acknowledgments, errors, mode
+/// transitions, and unrecognized data lines. Status events (`%...%`) are
+/// handled separately by [`StatusEvent`](super::status_event::StatusEvent).
 #[derive(Debug, PartialEq, Eq)]
 pub enum Response<'a> {
     /// Command acknowledged successfully (`AOK`).
@@ -18,19 +20,6 @@ pub enum Response<'a> {
     Cmd,
     /// Exited command mode (`END`). Module returned to data mode.
     End,
-    /// Module has rebooted (`%REBOOT%`).
-    Reboot,
-    /// BLE connection established.
-    /// `address_type`: 0 = public, 1 = random.
-    /// `address`: ASCII hex MAC address (e.g. `b"AABBCCDDEEFF"`).
-    Connect { address_type: u8, address: &'a [u8] },
-    /// BLE connection lost (`%DISCONNECT%`).
-    Disconnect,
-    /// Connection parameters updated (`%CONN_PARAM,...%`).
-    /// Raw parameter bytes (e.g. `b"0006,0000,01F4"`).
-    ConnParam(&'a [u8]),
-    /// UART Transparent data pipe established (`%STREAM_OPEN%`).
-    StreamOpen,
     /// Unrecognized or intermediate data. Captures multi-line response content
     /// (e.g. individual lines from `LS`, `D`, `V` commands) as well as any
     /// unknown messages.

@@ -1,10 +1,10 @@
-//! `defmt::Format` implementation for [`Response`].
+//! `defmt::Format` implementation for [`StatusEvent`].
 //!
 //! Provides human-readable formatting for RTT logging on the target. MAC
 //! addresses are displayed as `XX:XX:XX:XX:XX:XX` and byte slices are shown
 //! as ASCII text.
 
-use super::response::Response;
+use super::status_event::StatusEvent;
 
 /// Formats a MAC address from a flat ASCII hex byte slice (e.g. `b"AABBCCDDEEFF"`)
 /// into colon-separated form (`AA:BB:CC:DD:EE:FF`).
@@ -35,14 +35,10 @@ fn format_ascii(data: &[u8], f: defmt::Formatter<'_>) {
     }
 }
 
-impl defmt::Format for Response<'_> {
+impl defmt::Format for StatusEvent<'_> {
     fn format(&self, f: defmt::Formatter<'_>) {
         match self {
-            Self::Aok => defmt::write!(f, "AOK"),
-            Self::Err => defmt::write!(f, "ERR"),
-            Self::Cmd => defmt::write!(f, "CMD>"),
-            Self::End => defmt::write!(f, "END"),
-            Self::Reboot => defmt::write!(f, "REBOOT"),
+            Self::Reboot => defmt::write!(f, "Reboot"),
             Self::Connect {
                 address_type,
                 address,
@@ -63,8 +59,8 @@ impl defmt::Format for Response<'_> {
                 defmt::write!(f, ")");
             }
             Self::StreamOpen => defmt::write!(f, "StreamOpen"),
-            Self::Data(data) => {
-                defmt::write!(f, "Data(");
+            Self::Unknown(data) => {
+                defmt::write!(f, "Unknown(");
                 format_ascii(data, f);
                 defmt::write!(f, ")");
             }
