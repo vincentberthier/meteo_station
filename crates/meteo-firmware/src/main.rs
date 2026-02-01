@@ -179,11 +179,6 @@ async fn ble_task(uart: BufferedUart<'static>, mut rst_n: Output<'static>) {
         warn!("BLE: failed to set name: {:?}", Debug2Format(&e));
     }
 
-    // Set features: enable auto-advertise on power up (bit 0x2000)
-    if let Err(e) = ble.execute(Command::SetFeatures(0x2000)).await {
-        warn!("BLE: failed to set features: {:?}", Debug2Format(&e));
-    }
-
     // Exit command mode (module starts advertising automatically)
     if let Err(e) = ble.exit_command_mode().await {
         error!("BLE: failed to exit command mode: {:?}", Debug2Format(&e));
