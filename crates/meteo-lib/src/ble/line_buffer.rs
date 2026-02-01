@@ -113,6 +113,55 @@ impl<const N: usize> LineBuffer<N> {
         }
     }
 
+    /// Processes at most one complete line from the buffer.
+    ///
+    /// If a complete line is available, calls `f` with the line content and
+    /// returns `true`. Otherwise returns `false` without calling `f`.
+    ///
+    /// This is useful when you need to process lines one at a time (e.g. in a
+    /// driver that needs to react to each response individually).
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "index arithmetic is bounded by self.len"
+    )]
+    pub fn process_line<F: FnMut(&[u8])>(&mut self, mut f: F) -> bool {
+        // Skip leading line-ending characters
+        let start = self.skip_line_endings(0);
+        if start >= self.len {
+            self.len = 0;
+            return false;
+        }
+
+        // Find the next line-ending character
+        let mut i = start;
+        let mut found = false;
+        while i < self.len {
+            if self.buf[i] == b'\r' || self.buf[i] == b'\n' {
+                found = true;
+                break;
+            }
+            i += 1;
+        }
+
+        if found {
+            f(&self.buf[start..i]);
+            let remaining_len = self.len - i;
+            self.buf.copy_within(i..self.len, 0);
+            self.len = remaining_len;
+            true
+        } else if self.len >= N {
+            f(&self.buf[start..self.len]);
+            self.len = 0;
+            true
+        } else {
+            if start > 0 {
+                self.buf.copy_within(start..self.len, 0);
+                self.len -= start;
+            }
+            false
+        }
+    }
+
     /// Returns the position past any leading line-ending characters from `from`.
     #[expect(
         clippy::arithmetic_side_effects,
