@@ -5,7 +5,11 @@ authors.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+defmt = ["dep:defmt"]
+
 [dependencies]
+defmt = { workspace = true, optional = true }
 embedded-hal-async = { workspace = true }
 
 [dev-dependencies]
