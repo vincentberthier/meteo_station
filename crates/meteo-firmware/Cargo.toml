@@ -5,6 +5,11 @@ authors.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+## Perform a factory reset of the RN4871 BLE module on boot.
+## Use this to recover from bad stored configuration.
+factory-reset = ["meteo-lib/factory-reset"]
+
 [dependencies]
 # Workspace library
 meteo-lib = { workspace = true, features = ["defmt"] }

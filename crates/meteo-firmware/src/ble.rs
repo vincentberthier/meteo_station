@@ -72,6 +72,37 @@ pub async fn ble_task(uart: BufferedUart<'static>, mut rst_n: Output<'static>) {
     }
     debug!("BLE: entered command mode");
 
+    // Factory reset to clear any bad stored configuration
+    #[cfg(feature = "factory-reset")]
+    {
+        debug!("BLE: factory reset...");
+        if let Err(e) = ble.factory_reset().await {
+            error!("BLE: factory reset failed: {:?}", Debug2Format(&e));
+            return;
+        }
+        debug!("BLE: factory reset done, module rebooting");
+
+        // Wait for reboot after factory reset
+        if let Err(e) = ble.wait_for_reboot().await {
+            error!(
+                "BLE: failed to detect reboot after factory reset: {:?}",
+                Debug2Format(&e)
+            );
+            return;
+        }
+        debug!("BLE: module rebooted after factory reset");
+
+        // Re-enter command mode after factory reset reboot
+        if let Err(e) = ble.enter_command_mode().await {
+            error!(
+                "BLE: failed to re-enter command mode: {:?}",
+                Debug2Format(&e)
+            );
+            return;
+        }
+        debug!("BLE: re-entered command mode");
+    }
+
     // Query and log firmware version
     match ble.query(Command::GetFirmwareVersion, &mut buf).await {
         Ok(n) => debug!("BLE firmware: {}", str::from_utf8(&buf[..n]).unwrap_or("?")),

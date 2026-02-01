@@ -13,6 +13,8 @@ pub enum ResponseType {
     SingleLine,
     /// Command returns multiple data lines terminated by `CMD>`.
     MultiLine,
+    /// Command triggers a module reboot (`%REBOOT%`).
+    Reboot,
 }
 
 /// A typed command for the RN4871 BLE module.
@@ -41,6 +43,13 @@ pub enum Command<'a> {
     GetDeviceName,
     /// Dump full device configuration (`D`). Returns multiple data lines.
     DumpConfig,
+    /// Factory reset (`SF,1`). Module reboots after this command.
+    ///
+    /// Do NOT use with `execute()`/`query()` — use
+    /// [`Rn4871::factory_reset`](super::super::Rn4871::factory_reset) instead,
+    /// which handles the reboot sequence.
+    #[cfg(feature = "factory-reset")]
+    FactoryReset,
 }
 
 impl Command<'_> {
@@ -51,6 +60,8 @@ impl Command<'_> {
             Self::SetName(_) | Self::SetFeatures(_) => ResponseType::Aok,
             Self::GetFirmwareVersion | Self::GetDeviceName => ResponseType::SingleLine,
             Self::DumpConfig => ResponseType::MultiLine,
+            #[cfg(feature = "factory-reset")]
+            Self::FactoryReset => ResponseType::Reboot,
         }
     }
 
@@ -66,6 +77,8 @@ impl Command<'_> {
             Self::GetFirmwareVersion => b"V",
             Self::GetDeviceName => b"GN",
             Self::DumpConfig => b"D",
+            #[cfg(feature = "factory-reset")]
+            Self::FactoryReset => b"SF,1",
             Self::SetName(name) => {
                 return write_prefixed(b"SN,", name.as_bytes(), buf);
             }

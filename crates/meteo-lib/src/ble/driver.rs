@@ -175,6 +175,27 @@ impl<U: Uart> Rn4871<U> {
         self.wait_for_marker(b"END").await
     }
 
+    /// Sends a factory reset command (`SF,1`) and waits for the module to reboot.
+    ///
+    /// Must be called while in command mode. After this returns, the module
+    /// has rebooted and is back in data mode (not command mode).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::CommandTooLong` if the internal buffer is too small,
+    /// or `Error::Uart` on I/O failure.
+    #[cfg(feature = "factory-reset")]
+    pub async fn factory_reset(&mut self) -> Result<(), Error<U::Error>> {
+        let mut cmd_buf = [0_u8; CMD_BUF_SIZE];
+        let n = Command::FactoryReset
+            .write_to(&mut cmd_buf)
+            .ok_or(Error::CommandTooLong)?;
+        self.uart.write(&cmd_buf[..n]).await.map_err(Error::Uart)?;
+        self.uart.write(b"\r").await.map_err(Error::Uart)?;
+        self.line_buf.clear();
+        self.wait_for_marker(b"Reboot").await
+    }
+
     /// Executes a command that expects `AOK` (e.g. `SetName`, `SetFeatures`).
     ///
     /// # Errors
