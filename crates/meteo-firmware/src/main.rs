@@ -7,8 +7,10 @@ use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::i2c::Master;
 use embassy_stm32::i2c::{Config as I2cConfig, I2c};
 use embassy_stm32::mode::Async;
+use embassy_stm32::usart::{Config as UsartConfig, UartRx};
 use embassy_stm32::{bind_interrupts, peripherals};
 use embassy_time::{Duration, Timer};
+use meteo_lib::ble::{self, LineBuffer};
 use meteo_lib::bmp388::Bmp388;
 use meteo_lib::trunc2;
 use {defmt_rtt as _, panic_probe as _};
@@ -16,6 +18,7 @@ use {defmt_rtt as _, panic_probe as _};
 bind_interrupts!(struct Irqs {
     I2C1_EV => embassy_stm32::i2c::EventInterruptHandler<peripherals::I2C1>;
     I2C1_ER => embassy_stm32::i2c::ErrorInterruptHandler<peripherals::I2C1>;
+    USART2 => embassy_stm32::usart::InterruptHandler<peripherals::USART2>;
 });
 
 #[embassy_executor::task]
@@ -84,6 +87,30 @@ async fn read_barometer(i2c: I2c<'static, Async, Master>) {
     }
 }
 
+/// BLE UART debug task: reads bytes from the RN4871, frames lines, parses and logs them.
+#[embassy_executor::task]
+async fn ble_debug(mut rx: UartRx<'static, Async>) {
+    let mut line_buf = LineBuffer::<256>::new();
+    let mut rx_buf = [0_u8; 64];
+
+    debug!("BLE debug task started, listening on USART2");
+
+    loop {
+        match rx.read_until_idle(&mut rx_buf).await {
+            Ok(n) => {
+                line_buf.push_bytes(&rx_buf[..n]);
+                line_buf.for_each_line(|line| {
+                    let response = ble::parse(line);
+                    debug!("BLE: {:?}", response);
+                });
+            }
+            Err(e) => {
+                warn!("BLE UART read error: {:?}", Debug2Format(&e));
+            }
+        }
+    }
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     info!("Starting Nucleo H753ZI Weather Station");
@@ -109,6 +136,13 @@ async fn main(spawner: Spawner) {
         p.I2C1, p.PB8, p.PB9, Irqs, p.DMA1_CH0, p.DMA1_CH1, i2c_config,
     );
     spawner.spawn(read_barometer(i2c)).unwrap();
+
+    // USART2 for RN4871 BLE module on ZIO connector CN9:
+    //   D53 (pin 6) = USART_B_TX = PD5
+    //   D52 (pin 4) = USART_B_RX = PD6
+    let usart_config = UsartConfig::default(); // 115200 8N1
+    let uart_rx = UartRx::new(p.USART2, Irqs, p.PD6, p.DMA1_CH2, usart_config).unwrap();
+    spawner.spawn(ble_debug(uart_rx)).unwrap();
 
     info!("Init complete!");
 

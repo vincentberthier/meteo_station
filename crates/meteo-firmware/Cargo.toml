@@ -7,7 +7,7 @@ license.workspace = true
 
 [dependencies]
 # Workspace library
-meteo-lib = { workspace = true }
+meteo-lib = { workspace = true, features = ["defmt"] }
 
 # Target-specific dependencies (embedded only)
 [target.'cfg(target_arch = "arm")'.dependencies]
