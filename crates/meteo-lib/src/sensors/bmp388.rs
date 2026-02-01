@@ -24,9 +24,18 @@ impl<I, E> Bmp388<I>
 where
     I: I2c<Error = E>,
 {
+    /// Creates a new BMP388 driver instance.
+    ///
+    /// Verifies the chip ID and configures the sensor for normal mode with
+    /// both pressure and temperature measurements enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::I2c` if communication fails, or `Error::WrongChipId`
+    /// if the chip doesn't identify as a BMP388.
     pub async fn new(mut i2c: I, address: u8) -> Result<Self, Error<E>> {
         // Verify chip ID
-        let mut chip_id = [0u8; 1];
+        let mut chip_id = [0_u8; 1];
         i2c.write_read(address, &[CHIP_ID_REG], &mut chip_id)
             .await
             .map_err(Error::I2c)?;
@@ -41,7 +50,7 @@ where
             .map_err(Error::I2c)?;
 
         // Read calibration data
-        let mut calib_raw = [0u8; 21];
+        let mut calib_raw = [0_u8; 21];
         i2c.write_read(address, &[CALIB_DATA], &mut calib_raw)
             .await
             .map_err(Error::I2c)?;
@@ -55,25 +64,30 @@ where
         })
     }
 
+    /// Reads the current temperature and pressure from the sensor.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::I2c` if communication with the sensor fails.
     pub async fn read(&mut self) -> Result<Reading, Error<E>> {
-        let mut press_data = [0u8; 3];
+        let mut press_data = [0_u8; 3];
         self.i2c
             .write_read(self.address, &[PRESS_MSB], &mut press_data)
             .await
             .map_err(Error::I2c)?;
 
-        let press_raw = (u32::from(press_data[2]) << 16)
-            | (u32::from(press_data[1]) << 8)
+        let press_raw = (u32::from(press_data[2]) << 16_i32)
+            | (u32::from(press_data[1]) << 8_i32)
             | u32::from(press_data[0]);
 
-        let mut temp_data = [0u8; 3];
+        let mut temp_data = [0_u8; 3];
         self.i2c
             .write_read(self.address, &[TEMP_MSB], &mut temp_data)
             .await
             .map_err(Error::I2c)?;
 
-        let temp_raw = (u32::from(temp_data[2]) << 16)
-            | (u32::from(temp_data[1]) << 8)
+        let temp_raw = (u32::from(temp_data[2]) << 16_i32)
+            | (u32::from(temp_data[1]) << 8_i32)
             | u32::from(temp_data[0]);
 
         let temperature = self.calib.compensate_temperature(temp_raw);
@@ -120,6 +134,18 @@ struct CalibData {
 }
 
 impl CalibData {
+    #[expect(
+        clippy::similar_names,
+        reason = "names match Bosch BMP388 datasheet nomenclature"
+    )]
+    #[expect(
+        clippy::little_endian_bytes,
+        reason = "BMP388 stores calibration data in little-endian"
+    )]
+    #[expect(
+        clippy::lossy_float_literal,
+        reason = "constants from Bosch reference compensation code"
+    )]
     fn from_raw_bytes(data: &[u8; 21]) -> Self {
         let nvm_par_t1 = u16::from_le_bytes([data[0], data[1]]);
         let nvm_par_t2 = u16::from_le_bytes([data[2], data[3]]);
@@ -156,6 +182,10 @@ impl CalibData {
         }
     }
 
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "u32 ADC value intentionally cast to f32 for Bosch compensation formula"
+    )]
     fn compensate_temperature(&mut self, uncomp_temp: u32) -> f32 {
         let partial_data1 = uncomp_temp as f32 - self.par_t1;
         let partial_data2 = partial_data1 * self.par_t2;
@@ -163,6 +193,14 @@ impl CalibData {
         self.t_lin
     }
 
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "u32 ADC value intentionally cast to f32 for Bosch compensation formula"
+    )]
+    #[expect(
+        clippy::shadow_unrelated,
+        reason = "partial_data re-bindings follow Bosch reference algorithm stages"
+    )]
     fn compensate_pressure(&self, uncomp_press: u32) -> f32 {
         let partial_data1 = self.par_p6 * self.t_lin;
         let partial_data2 = self.par_p7 * (self.t_lin * self.t_lin);

@@ -8,6 +8,14 @@
 ///
 /// The value truncated to 2 decimal places
 #[must_use]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "truncation is the intended behavior"
+)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "acceptable for display-only truncation"
+)]
 pub fn trunc2(v: f32) -> f32 {
     let scaled = v * 100.0;
     let scaled_i = scaled as i32;
