@@ -1,5 +1,6 @@
 pub mod driver;
 pub mod encoding;
+pub mod gatt;
 pub mod line_buffer;
 pub mod rn4871;
 
