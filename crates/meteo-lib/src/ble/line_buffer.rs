@@ -205,8 +205,9 @@ impl<const N: usize> LineBuffer<N> {
     /// Extracts at most one `%...%` status event from the buffer.
     ///
     /// Scans the buffer for content delimited by two `%` characters. If found,
-    /// calls `f` with the full event **including** the `%` delimiters (e.g.
-    /// `%DISCONNECT%`), removes it from the buffer, and returns `true`.
+    /// calls `f` with the inner content **without** the `%` delimiters (e.g.
+    /// `DISCONNECT` for `%DISCONNECT%`), removes the event from the buffer,
+    /// and returns `true`.
     ///
     /// This is needed because RN4871 status events like `%CONNECT,...%` and
     /// `%DISCONNECT%` may not be followed by `\r\n` on some firmware versions,
@@ -222,9 +223,9 @@ impl<const N: usize> LineBuffer<N> {
         while i < self.len {
             if self.buf[i] == b'%' {
                 if let Some(event_start) = start {
-                    // Found the closing '%' — extract event including both delimiters
+                    // Found the closing '%' — extract inner content without delimiters
                     let event_end = i + 1;
-                    f(&self.buf[event_start..event_end]);
+                    f(&self.buf[event_start + 1..i]);
 
                     // Compact: remove the event from the buffer
                     let remaining = self.len - event_end;
@@ -525,7 +526,7 @@ mod tests {
 
         // Then
         assert!(found, "should find status event");
-        assert_eq!(event, b"%DISCONNECT%", "should extract full event");
+        assert_eq!(event, b"DISCONNECT", "should extract inner content");
         assert_eq!(
             buf.as_bytes(),
             b"",
@@ -546,7 +547,7 @@ mod tests {
 
         // Then
         assert!(found, "should find connect event");
-        assert_eq!(event, b"%CONNECT,1,AABBCCDDEEFF%");
+        assert_eq!(event, b"CONNECT,1,AABBCCDDEEFF");
         Ok(())
     }
 
@@ -562,7 +563,7 @@ mod tests {
 
         // Then
         assert!(found, "should find event");
-        assert_eq!(event, b"%DISCONNECT%");
+        assert_eq!(event, b"DISCONNECT");
         assert_eq!(
             buf.as_bytes(),
             b"noisemore",
@@ -611,8 +612,8 @@ mod tests {
 
         // Then
         assert_eq!(events.len(), 2, "should find two events");
-        assert_eq!(events[0], b"%DISCONNECT%");
-        assert_eq!(events[1], b"%CONNECT,0,112233445566%");
+        assert_eq!(events[0], b"DISCONNECT");
+        assert_eq!(events[1], b"CONNECT,0,112233445566");
         Ok(())
     }
 }
