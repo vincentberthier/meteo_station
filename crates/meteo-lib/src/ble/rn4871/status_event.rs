@@ -28,6 +28,14 @@ pub enum StatusEvent<'a> {
     /// Connection parameters updated (`%CONN_PARAM,...%`).
     /// Raw parameter bytes (e.g. `b"0006,0000,01F4"`).
     ConnParam(&'a [u8]),
+    /// Client changed notification/indication subscription (CCCD write).
+    /// Sent as `%WC,<handle>,<data>%`.
+    WriteConfig {
+        /// Characteristic config handle.
+        handle: u16,
+        /// Raw hex data (e.g. `b"0100"` = notify on).
+        data: &'a [u8],
+    },
     /// UART Transparent data pipe established (`%STREAM_OPEN%`).
     StreamOpen,
     /// Unrecognized status event. Contains the inner content between `%`

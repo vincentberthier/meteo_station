@@ -3,6 +3,7 @@
 //! Parses the inner content of `%`-delimited status messages into typed
 //! [`StatusEvent`] values.
 
+use super::super::encoding;
 use super::status_event::StatusEvent;
 
 /// Parses the inner content of a `%...%` status message.
@@ -21,6 +22,7 @@ pub fn parse(inner: &[u8]) -> StatusEvent<'_> {
             StatusEvent::ConnParam(&inner[b"CONN_PARAM,".len()..])
         }
         _ if inner.starts_with(b"CONNECT,") => parse_connect_event(inner),
+        _ if inner.starts_with(b"WC,") => parse_wc_event(inner),
         _ => StatusEvent::Unknown(inner),
     }
 }
@@ -60,6 +62,31 @@ fn parse_connect_event(inner: &[u8]) -> StatusEvent<'_> {
         address_type,
         address,
     }
+}
+
+/// Parses a `WC,<handle>,<data>` status event.
+/// Returns `Unknown` if the format doesn't match.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "comma_pos < rest.len() so +1 won't overflow"
+)]
+fn parse_wc_event(inner: &[u8]) -> StatusEvent<'_> {
+    let Some(rest) = inner.strip_prefix(b"WC,") else {
+        return StatusEvent::Unknown(inner);
+    };
+
+    let Some(comma_pos) = rest.iter().position(|&b| b == b',') else {
+        return StatusEvent::Unknown(inner);
+    };
+
+    let handle_hex = &rest[..comma_pos];
+    let data = &rest[comma_pos + 1..];
+
+    let Some(handle) = encoding::parse_hex_u16(handle_hex) else {
+        return StatusEvent::Unknown(inner);
+    };
+
+    StatusEvent::WriteConfig { handle, data }
 }
 
 // grcov exclude start
@@ -258,6 +285,65 @@ mod tests {
             event,
             StatusEvent::Unknown(b"CONNECT,2,AABBCCDDEEFF"),
             "expected Unknown for invalid address type"
+        );
+        Ok(())
+    }
+
+    // --- WC (WriteConfig) events ---
+
+    #[test]
+    fn parse_wc_notify_subscribe() -> TestResult {
+        // Given
+        let inner = b"WC,0072,0100";
+
+        // When
+        let event = parse(inner);
+
+        // Then
+        assert_eq!(
+            event,
+            StatusEvent::WriteConfig {
+                handle: 0x0072,
+                data: b"0100",
+            },
+            "expected WriteConfig with notify subscribe"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_wc_notify_unsubscribe() -> TestResult {
+        // Given
+        let inner = b"WC,0072,0000";
+
+        // When
+        let event = parse(inner);
+
+        // Then
+        assert_eq!(
+            event,
+            StatusEvent::WriteConfig {
+                handle: 0x0072,
+                data: b"0000",
+            },
+            "expected WriteConfig with notify unsubscribe"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_wc_no_comma_returns_unknown() -> TestResult {
+        // Given — malformed WC without second comma
+        let inner = b"WC,0072";
+
+        // When
+        let event = parse(inner);
+
+        // Then
+        assert_eq!(
+            event,
+            StatusEvent::Unknown(b"WC,0072"),
+            "malformed WC should return Unknown"
         );
         Ok(())
     }

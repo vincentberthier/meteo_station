@@ -58,6 +58,11 @@ impl defmt::Format for StatusEvent<'_> {
                 format_ascii(params, f);
                 defmt::write!(f, ")");
             }
+            Self::WriteConfig { handle, data } => {
+                defmt::write!(f, "WriteConfig(handle={=u16:04X} data=", *handle);
+                format_ascii(data, f);
+                defmt::write!(f, ")");
+            }
             Self::StreamOpen => defmt::write!(f, "StreamOpen"),
             Self::Unknown(data) => {
                 defmt::write!(f, "Unknown(");
