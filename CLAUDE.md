@@ -12,25 +12,28 @@ Currently supports:
 
 ```bash
 # Build firmware (release)
-cargo make build
+just build
 
 # Flash to device
-cargo make flash
+just flash
 
 # Flash and attach with RTT logging
-cargo make run
+just run
 
 # Reset device under connect-under-reset
-cargo make reset
+just reset
 
 # Check code with clippy
-cargo make clippy
+just clippy
 
 # Format code
-cargo make format
+just format
+
+# Run tests on host
+just test
 
 # Show binary size
-cargo make size
+just size
 ```
 
 ### Testing with probe-rs
