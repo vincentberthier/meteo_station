@@ -41,6 +41,10 @@ run: build
 reset:
     probe-rs reset --chip {{ chip }} --connect-under-reset
 
+[doc('Run the BLE client CLI')]
+cli:
+    cargo run -p meteo-cli
+
 # --- Code quality recipes ---
 
 [doc('Format code')]
