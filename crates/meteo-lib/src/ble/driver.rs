@@ -359,11 +359,18 @@ impl<U: Uart> Rn4871<U> {
                                 f(line_data);
                             }
                         }
+                        Response::Cmd => {
+                            // CMD> arrived as a framed line (with \r\n) instead
+                            // of as a raw marker. Treat it as success.
+                            result = Some(Ok(()));
+                        }
+                        Response::End | Response::Aok | Response::NFail => {
+                            // END appears in LS output as a listing terminator.
+                            // AOK/NFail may appear in other multi-line contexts.
+                            // Skip them — the callback ignores irrelevant lines.
+                        }
                         Response::Err => {
                             result = Some(Result::Err(Error::CommandFailed));
-                        }
-                        _ => {
-                            result = Some(Result::Err(Error::UnexpectedResponse));
                         }
                     }
                 });
@@ -943,6 +950,52 @@ mod tests {
         assert_eq!(lines.len(), 2, "should collect lines across chunks");
         assert_eq!(lines[0], b"BTA=AABB");
         assert_eq!(lines[1], b"Name=Test");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_multiline_cmd_prompt_as_framed_line() -> TestResult {
+        // Given: CMD> arrives with \r\n, so it is parsed as a framed line
+        // rather than detected as a raw marker. This happens on some RN4871
+        // firmware versions.
+        let mock = MockUart::new(&[b"BTA=AABB\r\nName=Test\r\nCMD>\r\n"]);
+        let mut driver = Rn4871::new(mock);
+        let mut lines: Vec<Vec<u8>> = vec![];
+
+        // When
+        let result = driver
+            .query_multiline(Command::DumpConfig, |line| lines.push(line.to_vec()))
+            .await;
+
+        // Then
+        assert!(result.is_ok(), "CMD> as framed line should be treated as success");
+        assert_eq!(lines.len(), 2, "should collect all data lines");
+        assert_eq!(lines[0], b"BTA=AABB");
+        assert_eq!(lines[1], b"Name=Test");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_multiline_skips_end_in_ls_output() -> TestResult {
+        // Given: LS output includes END as a listing terminator before CMD>.
+        // The RN4871 sends: service UUID, chars, END, CMD>
+        let mock = MockUart::new(&[
+            b"A4E64B8B8DB34E08A7D57D3C3F2E1A00\r\n",
+            b"  A4E64B8B8DB34E08A7D57D3C3F2E1A01,0073,12\r\n",
+            b"  A4E64B8B8DB34E08A7D57D3C3F2E1A02,0076,12\r\n",
+            b"END\r\nCMD> ",
+        ]);
+        let mut driver = Rn4871::new(mock);
+        let mut lines: Vec<Vec<u8>> = vec![];
+
+        // When
+        let result = driver
+            .query_multiline(Command::ListServices, |line| lines.push(line.to_vec()))
+            .await;
+
+        // Then
+        assert!(result.is_ok(), "END in LS output should not cause UnexpectedResponse");
+        assert_eq!(lines.len(), 3, "should collect service UUID + 2 characteristic lines");
         Ok(())
     }
 }
