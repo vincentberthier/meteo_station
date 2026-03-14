@@ -6,6 +6,7 @@
 pub mod command;
 #[cfg(feature = "defmt")]
 mod format;
+pub mod ls_parser;
 pub(crate) mod parser;
 pub(crate) mod response;
 pub mod status_event;
