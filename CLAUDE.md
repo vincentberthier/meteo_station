@@ -1,9 +1,9 @@
-
 # CLAUDE.md
 
 Weather station firmware - embedded Rust for a meteorological monitoring device targeting the STM32H753ZI (Nucleo-144 board). Uses the Embassy async runtime for bare-metal embedded development (`no_std`).
 
 Currently supports:
+
 - BMP388 barometric pressure/temperature sensor (via I2C1)
 - LED indicators (onboard and external)
 - RN4871 BLE module (via USART2, planned)
@@ -53,9 +53,11 @@ This ensures probe-rs can cleanly detach from the debug probe before exiting.
 ## Architecture
 
 ### Async Runtime Pattern
+
 Uses Embassy's `#[embassy_executor::task]` for concurrent tasks. All peripherals are accessed asynchronously. Tasks communicate via `embassy_sync::channel::Channel` instead of shared memory.
 
 ### Module Structure
+
 ```
 crates/
 ├── meteo-firmware/        # Binary crate: STM32H753ZI-specific
@@ -72,37 +74,56 @@ crates/
 ```
 
 **Library vs Binary separation:**
+
 - `meteo-lib`: Hardware-agnostic drivers using `embedded-hal-async` traits
 - `meteo-firmware`: STM32H753ZI-specific hardware initialization and Embassy tasks
 
 ### Static Resource Pattern
+
 Hardware resources use `StaticCell<Mutex<...>>` for safe sharing between tasks:
+
 ```rust
 static SPI1: StaticCell<Mutex<ThreadModeRawMutex, ...>> = StaticCell::new();
 ```
 
 ### Target Configuration
+
 Primary: STM32H753ZI (`thumbv7em-none-eabihf`)
 
 ## Hardware
 
-All hardware datasheets are in `datasheets/`. Pin reference: `datasheets/nucleo_pins.csv`.
+Component datasheets are in `datasheets/`. Each PDF has a corresponding `.md` summary -- **read the `.md` files instead of the PDFs**:
+
+| Component                     | Summary                          | PDF                                         |
+| ----------------------------- | -------------------------------- | ------------------------------------------- |
+| BMP388 pressure/temp sensor   | `datasheets/bmp388.md`           | `bst-bmp388-ds001.pdf`                      |
+| BME280 humidity/pressure/temp | `datasheets/bme280.md`           | `bst-bme280-ds002.pdf`                      |
+| MLX90614 IR thermometer       | `datasheets/mlx90614.md`         | `MLX90614-Datasheet-Melexis.pdf`            |
+| VEML7700 ambient light sensor | `datasheets/veml7700.md`         | `veml7700.pdf`                              |
+| RN4870/71 BLE module          | `datasheets/rn4871.md`           | `rn4870.pdf`, `RN4870-71-...User-Guide.pdf` |
+| MT3608 boost converter        | `datasheets/mt3608.md`           | `MT3608-3223743.pdf`                        |
+| Weather meter kit             | `datasheets/weather_meter.md`    | `DS-15901-Weather_Meter.pdf`                |
+| Nucleo-H753ZI board           | `datasheets/nucleo_h753zi.md`    | `nucleo-h753zi.pdf`, `um2407-...pdf`        |
+| ESP32-S3-DevKitM              | `datasheets/esp32_s3_devkitm.md` | (online only)                               |
+| LiPo battery                  | `datasheets/lipo_battery.md`     | (text file)                                 |
+
+Pin reference: `datasheets/nucleo_pins.csv`.
 
 ### Pin Allocation
 
-| Function             | STM32 Pin | Connector         | Label       | Peripheral |
-|----------------------|-----------|-------------------|-------------|------------|
-| LED green (LD1)      | PB0       | CN10 pin 31 (D33) | TIM_D_PWM1  | GPIO       |
-| LED yellow (LD2)     | PE1       | onboard           | -           | GPIO       |
-| LED red (LD3)        | PB14      | onboard           | -           | GPIO       |
-| External LED         | PG2       | CN8 pin 14 (D49)  | I/O         | GPIO       |
-| I2C1_SCL (BMP388)    | PB8       | CN7 pin 2 (D15)   | I2C_A_SCL   | I2C1       |
-| I2C1_SDA (BMP388)    | PB9       | CN7 pin 4 (D14)   | I2C_A_SDA   | I2C1       |
-| USART2_TX (RN4871)   | PD5       | CN9 pin 6 (D53)   | USART_B_TX  | USART2     |
-| USART2_RX (RN4871)   | PD6       | CN9 pin 4 (D52)   | USART_B_RX  | USART2     |
-| USART2_RTS (RN4871)  | PD4       | CN9 pin 8 (D54)   | USART_B_RTS | USART2     |
-| USART2_CTS (RN4871)  | PD3       | CN9 pin 10 (D55)  | USART_B_CTS | USART2     |
-| BLE RST_N (RN4871)   | PA4       | CN7 pin 17 (D24)  | SPI_B_NSS   | GPIO       |
+| Function            | STM32 Pin | Connector         | Label       | Peripheral |
+| ------------------- | --------- | ----------------- | ----------- | ---------- |
+| LED green (LD1)     | PB0       | CN10 pin 31 (D33) | TIM_D_PWM1  | GPIO       |
+| LED yellow (LD2)    | PE1       | onboard           | -           | GPIO       |
+| LED red (LD3)       | PB14      | onboard           | -           | GPIO       |
+| External LED        | PG2       | CN8 pin 14 (D49)  | I/O         | GPIO       |
+| I2C1_SCL (BMP388)   | PB8       | CN7 pin 2 (D15)   | I2C_A_SCL   | I2C1       |
+| I2C1_SDA (BMP388)   | PB9       | CN7 pin 4 (D14)   | I2C_A_SDA   | I2C1       |
+| USART2_TX (RN4871)  | PD5       | CN9 pin 6 (D53)   | USART_B_TX  | USART2     |
+| USART2_RX (RN4871)  | PD6       | CN9 pin 4 (D52)   | USART_B_RX  | USART2     |
+| USART2_RTS (RN4871) | PD4       | CN9 pin 8 (D54)   | USART_B_RTS | USART2     |
+| USART2_CTS (RN4871) | PD3       | CN9 pin 10 (D55)  | USART_B_CTS | USART2     |
+| BLE RST_N (RN4871)  | PA4       | CN7 pin 17 (D24)  | SPI_B_NSS   | GPIO       |
 
 ## Code Standards
 
@@ -113,6 +134,7 @@ Use `defmt` macros for logging (`defmt::info!`, `defmt::error!`, etc.) - outputs
 Functions should be pure as much as possible to make testing easy. Hardware-interfacing code cannot be automatically tested, but logic should be. Tests run on the development machine (not the target hardware), so can use `std`.
 
 Tests modules should have this structure:
+
 ```rust
 // grcov exclude start
 #[expect(clippy::panic_in_result_fn, reason = "test module")]
@@ -121,7 +143,7 @@ mod tests {
     use core::{error, result};
 
     use test_log::test;
-  
+
     use super::super::Error;
     use super::*;
     type TestResult = result::Result<(), Box<dyn error::Error>>;
@@ -129,7 +151,7 @@ mod tests {
     #[test]
     fn test_name() -> TestResult {
         // Given
-        
+
 
         // When
 
