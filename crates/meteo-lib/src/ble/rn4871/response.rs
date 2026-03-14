@@ -20,6 +20,8 @@ pub enum Response<'a> {
     Cmd,
     /// Exited command mode (`END`). Module returned to data mode.
     End,
+    /// Local write succeeded but notification delivery failed (`NFail`).
+    NFail,
     /// Unrecognized or intermediate data. Captures multi-line response content
     /// (e.g. individual lines from `LS`, `D`, `V` commands) as well as any
     /// unknown messages.

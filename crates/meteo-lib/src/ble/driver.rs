@@ -78,6 +78,7 @@ pub trait Uart {
 enum ResponseKind {
     Aok,
     Err,
+    NFail,
     Cmd,
     End,
     Data,
@@ -89,6 +90,7 @@ impl ResponseKind {
         match response {
             Response::Aok => Self::Aok,
             Response::Err => Self::Err,
+            Response::NFail => Self::NFail,
             Response::Cmd => Self::Cmd,
             Response::End => Self::End,
             Response::Data(_) => Self::Data,
@@ -398,6 +400,9 @@ impl<U: Uart> Rn4871<U> {
             }
             match kind {
                 ResponseKind::Data => {}
+                // NFail means the local write succeeded but notification delivery failed.
+                // Treat as success — the characteristic value was still updated.
+                ResponseKind::NFail if expected == ResponseKind::Aok => return Ok(()),
                 ResponseKind::Err => return Result::Err(Error::CommandFailed),
                 _ => return Result::Err(Error::UnexpectedResponse),
             }
@@ -879,6 +884,46 @@ mod tests {
         // Then
         assert_eq!(lines.len(), 1, "should skip echo");
         assert_eq!(lines[0], b"BTA=AABBCCDDEEFF");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn execute_succeeds_on_nfail_response() -> TestResult {
+        // Given: NFail instead of AOK, followed by CMD> prompt
+        let mock = MockUart::new(&[b"NFail\r\nCMD> "]);
+        let mut driver = Rn4871::new(mock);
+
+        // When
+        let result = driver.execute(Command::SetName("Test")).await;
+
+        // Then
+        assert!(
+            result.is_ok(),
+            "NFail should be treated as success for Aok-expecting commands"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn execute_server_write_succeeds_on_nfail() -> TestResult {
+        // Given: ServerWrite returns NFail (notification delivery failed)
+        let data = [0xCD, 0xCC, 0xBB, 0x41];
+        let mock = MockUart::new(&[b"NFail\r\nCMD> "]);
+        let mut driver = Rn4871::new(mock);
+
+        // When
+        let result = driver
+            .execute(Command::ServerWrite {
+                handle: 0x0072,
+                data: &data,
+            })
+            .await;
+
+        // Then
+        assert!(
+            result.is_ok(),
+            "ServerWrite should succeed even with NFail"
+        );
         Ok(())
     }
 

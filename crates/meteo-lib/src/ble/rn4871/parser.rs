@@ -48,6 +48,7 @@ pub fn parse(line: &[u8]) -> Response<'_> {
     match trimmed {
         b"AOK" => Response::Aok,
         b"ERR" => Response::Err,
+        b"NFail" => Response::NFail,
         b"CMD>" | b"CMD> " | b"CMD" => Response::Cmd,
         b"END" => Response::End,
         _ => Response::Data(trimmed),
@@ -229,6 +230,38 @@ mod tests {
 
         // Then
         assert_eq!(response, Response::Data(b""), "expected Data for bare CR");
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_nfail_response() -> TestResult {
+        // Given
+        let line = b"NFail\r";
+
+        // When
+        let response = parse(line);
+
+        // Then
+        assert_eq!(response, Response::NFail, "expected NFail response");
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_nfail_without_cr() -> TestResult {
+        // Given
+        let line = b"NFail";
+
+        // When
+        let response = parse(line);
+
+        // Then
+        assert_eq!(
+            response,
+            Response::NFail,
+            "expected NFail even without trailing CR"
+        );
 
         Ok(())
     }
