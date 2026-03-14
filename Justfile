@@ -4,6 +4,7 @@
 # --- Variables ---
 
 target := "thumbv7em-none-eabihf"
+host_target := "x86_64-unknown-linux-gnu"
 chip := "STM32H753ZITx"
 binary := "target" / target / "release/meteo-firmware"
 
@@ -43,7 +44,7 @@ reset:
 
 [doc('Run the BLE client CLI')]
 cli:
-    cargo run -p meteo-cli
+    cargo run -p meteo-cli --target {{ host_target }}
 
 # --- Code quality recipes ---
 
