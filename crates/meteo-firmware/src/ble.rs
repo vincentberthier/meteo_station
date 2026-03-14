@@ -8,8 +8,17 @@ use core::str;
 use defmt::*;
 use embassy_stm32::gpio::Output;
 use embassy_stm32::usart::{self, BufferedUart};
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
-use meteo_lib::ble::{Command, LineBuffer, Rn4871, Uart, parse_status_event};
+use meteo_lib::ble::gatt::{
+    self, F32_SIZE, GattHandles, METEO_SERVICE_UUID, PRESSURE_CHAR_UUID, PROP_READ_NOTIFY,
+    TEMPERATURE_CHAR_UUID,
+};
+use meteo_lib::ble::{
+    Command, LineBuffer, Rn4871, StatusEvent, Uart, encode_f32, parse_status_event,
+};
+use meteo_lib::bmp388::Reading;
 
 /// Adapter wrapping Embassy's [`BufferedUart`] to implement the BLE [`Uart`] trait.
 pub struct EmbassyUart {
@@ -36,17 +45,14 @@ impl Uart for EmbassyUart {
     }
 }
 
-/// Extracts and logs all `%...%` status events from the line buffer.
-fn process_status_events(line_buf: &mut LineBuffer<256>) {
-    while line_buf.process_status_event(|event| {
-        let status = parse_status_event(event);
-        debug!("BLE status: {:?}", status);
-    }) {}
-}
-
-/// BLE task: configures the RN4871 as `MeteoStation` and monitors messages.
+/// BLE task: configures the RN4871 with GATT services and streams sensor data.
 #[embassy_executor::task]
-pub async fn ble_task(uart: BufferedUart<'static>, mut rst_n: Output<'static>) {
+#[allow(clippy::too_many_lines, reason = "hardware init sequence is inherently long")]
+pub async fn ble_task(
+    uart: BufferedUart<'static>,
+    mut rst_n: Output<'static>,
+    sensor_channel: &'static Channel<ThreadModeRawMutex, Reading, 1>,
+) {
     let adapter = EmbassyUart::new(uart);
     let mut ble = Rn4871::new(adapter);
     let mut buf = [0_u8; 64];
@@ -133,31 +139,178 @@ pub async fn ble_task(uart: BufferedUart<'static>, mut rst_n: Output<'static>) {
         warn!("BLE: failed to set name: {:?}", Debug2Format(&e));
     }
 
-    // Exit command mode (module starts advertising automatically)
+    // --- GATT service setup ---
+    // Clear existing private services
+    if let Err(e) = ble.execute(Command::ClearPrivateServices).await {
+        warn!("BLE: failed to clear services: {:?}", Debug2Format(&e));
+    }
+
+    // Define MeteoStation service
+    if let Err(e) = ble
+        .execute(Command::DefineService(&METEO_SERVICE_UUID))
+        .await
+    {
+        warn!("BLE: failed to define service: {:?}", Debug2Format(&e));
+    }
+
+    // Define temperature characteristic (read + notify, 4 bytes)
+    if let Err(e) = ble
+        .execute(Command::DefineCharacteristic {
+            uuid: &TEMPERATURE_CHAR_UUID,
+            properties: PROP_READ_NOTIFY,
+            size: F32_SIZE,
+        })
+        .await
+    {
+        warn!(
+            "BLE: failed to define temperature char: {:?}",
+            Debug2Format(&e)
+        );
+    }
+
+    // Define pressure characteristic (read + notify, 4 bytes)
+    if let Err(e) = ble
+        .execute(Command::DefineCharacteristic {
+            uuid: &PRESSURE_CHAR_UUID,
+            properties: PROP_READ_NOTIFY,
+            size: F32_SIZE,
+        })
+        .await
+    {
+        warn!(
+            "BLE: failed to define pressure char: {:?}",
+            Debug2Format(&e)
+        );
+    }
+
+    // Exit command mode to trigger NVM store, then reboot to activate
     if let Err(e) = ble.exit_command_mode().await {
         error!("BLE: failed to exit command mode: {:?}", Debug2Format(&e));
         return;
     }
-    info!("BLE: configured as MeteoStation, now advertising");
+    debug!("BLE: services defined, rebooting to activate");
 
-    // Monitor incoming BLE messages using the driver's UART adapter.
-    // Status events (%CONNECT%, %DISCONNECT%, etc.) may not be followed
-    // by \r\n on this firmware version, so we scan the raw buffer for
-    // %...% patterns in addition to line-framed responses.
+    // Hardware reboot to activate NVM-stored services
+    rst_n.set_low();
+    Timer::after(Duration::from_millis(5)).await;
+    rst_n.set_high();
+    if let Err(e) = ble.wait_for_reboot().await {
+        error!("BLE: failed to detect reboot: {:?}", Debug2Format(&e));
+        return;
+    }
+    debug!("BLE: module rebooted with GATT services");
+
+    // Re-enter command mode to discover handles via LS
+    if let Err(e) = ble.enter_command_mode().await {
+        error!(
+            "BLE: failed to enter command mode for LS: {:?}",
+            Debug2Format(&e)
+        );
+        return;
+    }
+
+    // Discover characteristic handles
+    let mut handles = GattHandles::default();
+    if let Err(e) = ble
+        .query_multiline(Command::ListServices, |line| {
+            gatt::collect_handles(line, &mut handles);
+        })
+        .await
+    {
+        warn!("BLE: failed to list services: {:?}", Debug2Format(&e));
+    }
+
+    match (handles.temperature, handles.pressure) {
+        (Some(t), Some(p)) => {
+            info!("BLE: handles discovered: temperature={=u16:04X}, pressure={=u16:04X}", t, p);
+        }
+        _ => {
+            warn!(
+                "BLE: some handles missing: temperature={:?}, pressure={:?}",
+                handles.temperature, handles.pressure
+            );
+        }
+    }
+
+    // Exit command mode — module starts advertising
+    if let Err(e) = ble.exit_command_mode().await {
+        error!("BLE: failed to exit command mode: {:?}", Debug2Format(&e));
+        return;
+    }
+    info!("BLE: configured as MeteoStation with GATT services, now advertising");
+
+    // --- Monitoring loop: borrow-safe structure ---
+    let mut connected = false;
     let mut line_buf = LineBuffer::<256>::new();
     let mut rx_buf = [0_u8; 64];
-    let raw_uart = ble.uart_mut();
+
     loop {
-        match raw_uart.read(&mut rx_buf).await {
-            Ok(n) => {
+        // Phase 1: drain UART data with adaptive timeout.
+        let timeout = if connected {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_secs(5)
+        };
+        let uart_result =
+            embassy_time::with_timeout(timeout, ble.uart_mut().read(&mut rx_buf)).await;
+        // ble borrow released here — uart_result owns the Result, not the reference.
+        match uart_result {
+            Ok(Ok(n)) => {
                 line_buf.push_bytes(&rx_buf[..n]);
-                // Extract %...% status events from the raw buffer
-                process_status_events(&mut line_buf);
-                // Drain any remaining line-framed data to keep buffer clean
-                line_buf.for_each_line(|_line| {});
+                // Extract %...% status events
+                while line_buf.process_status_event(|event| {
+                    match parse_status_event(event) {
+                        StatusEvent::Connect { .. } => connected = true,
+                        StatusEvent::Disconnect => connected = false,
+                        StatusEvent::WriteConfig { handle, data } => {
+                            debug!(
+                                "BLE: CCCD write handle={=u16:04X} data={}",
+                                handle,
+                                str::from_utf8(data).unwrap_or("?")
+                            );
+                        }
+                        other => debug!("BLE: {:?}", other),
+                    }
+                }) {}
+                // Drain remaining line-framed data
+                line_buf.for_each_line(|_| {});
             }
-            Err(e) => {
-                warn!("BLE UART read error: {:?}", Debug2Format(&e));
+            Ok(Err(e)) => warn!("BLE UART read error: {:?}", Debug2Format(&e)),
+            Err(_) => {} // timeout — fall through to check sensor data
+        }
+
+        // Phase 2: push sensor data when connected.
+        // ble is no longer borrowed here — safe to call driver methods.
+        if connected
+            && let Ok(reading) = sensor_channel.try_receive()
+            && let (Some(t_handle), Some(p_handle)) = (handles.temperature, handles.pressure)
+        {
+            let t_bytes = encode_f32(reading.temperature);
+            let p_bytes = encode_f32(reading.pressure);
+            if let Err(e) = ble.enter_command_mode().await {
+                warn!("BLE: cmd mode failed: {:?}", Debug2Format(&e));
+                continue;
+            }
+            if let Err(e) = ble
+                .execute(Command::ServerWrite {
+                    handle: t_handle,
+                    data: &t_bytes,
+                })
+                .await
+            {
+                warn!("BLE: temp write failed: {:?}", Debug2Format(&e));
+            }
+            if let Err(e) = ble
+                .execute(Command::ServerWrite {
+                    handle: p_handle,
+                    data: &p_bytes,
+                })
+                .await
+            {
+                warn!("BLE: pressure write failed: {:?}", Debug2Format(&e));
+            }
+            if let Err(e) = ble.exit_command_mode().await {
+                warn!("BLE: exit cmd mode failed: {:?}", Debug2Format(&e));
             }
         }
     }

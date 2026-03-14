@@ -27,7 +27,10 @@ use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::i2c::{Config as I2cConfig, I2c};
 use embassy_stm32::usart::{BufferedUart, Config as UsartConfig};
 use embassy_stm32::{Config, bind_interrupts, peripherals};
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
+use meteo_lib::bmp388::Reading;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -39,6 +42,9 @@ bind_interrupts!(struct Irqs {
 bind_interrupts!(struct UsartIrqs {
     USART2 => embassy_stm32::usart::BufferedInterruptHandler<peripherals::USART2>;
 });
+
+/// Channel for passing sensor readings from the barometer task to the BLE task.
+static SENSOR_CHANNEL: Channel<ThreadModeRawMutex, Reading, 1> = Channel::new();
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -71,7 +77,7 @@ async fn main(spawner: Spawner) {
         p.I2C1, p.PB8, p.PB9, Irqs, p.DMA1_CH0, p.DMA1_CH1, i2c_config,
     );
     spawner
-        .spawn(bmp::read_barometer(i2c))
+        .spawn(bmp::read_barometer(i2c, &SENSOR_CHANNEL))
         .expect("read_barometer already spawned");
 
     // USART2 for RN4871 BLE module (buffered, interrupt-driven):
@@ -95,7 +101,7 @@ async fn main(spawner: Spawner) {
     .expect("USART2 configuration failed");
     let ble_rst_n = Output::new(p.PA4, Level::High, Speed::Low);
     spawner
-        .spawn(ble::ble_task(ble_uart, ble_rst_n))
+        .spawn(ble::ble_task(ble_uart, ble_rst_n, &SENSOR_CHANNEL))
         .expect("ble_task already spawned");
 
     info!("Init complete!");
