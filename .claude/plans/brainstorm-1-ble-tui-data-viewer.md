@@ -898,7 +898,7 @@ Progress tracking (checked off during `/tyrex:code:implement-light`):
 - [x] 2. Scaffold `meteo-tui` crate, workspace member, Justfile recipes/clippy/test — stub `main.rs` + placeholder modules; single crossterm 0.29 confirmed; builds + clippy clean.
 - [x] 3. `app.rs` state & logic + 10 unit tests — `App`/`SensorState`/`ClientEvent`/`ConnectionStatus`; 10 tests pass. Note: `ClientEvent` is `Copy`; module carries a temporary `#![expect(dead_code)]` to remove in substep 6 when types are consumed.
 - [x] 4. `client.rs` auto-reconnecting btleplug central + 2 `decode_reading` tests — btleplug API matched sketch exactly; no stdout/stderr; 2 tests pass. Carries a temporary `#![expect(dead_code)]` to remove in substep 6.
-- [ ] 5. `ui.rs` registry-driven rendering + 5 chart-axis helper tests
+- [x] 5. `ui.rs` registry-driven rendering + 5 chart-axis helper tests — `render`/`render_status`/`render_sensor` + pure `y_bounds`/`x_axis_max`; ratatui 0.30 API confirmed; 5 tests pass. Carries a temporary `#![expect(dead_code)]` to remove in substep 6 (all three modules — app, client, ui — carry it).
 - [ ] 6. `main.rs` terminal lifecycle + event loop wiring
 - [ ] All checks green (fmt, clippy host+firmware, nextest, firmware release build)
 - [ ] Manual verification on Gaia (live values, charts, reconnect, quit)
