@@ -23,6 +23,12 @@ pub const PRESSURE_CHAR_UUID: [u8; 16] = [
 /// BLE GATT property: read (0x02).
 pub const PROP_READ: u8 = 0x02;
 
+/// BLE GATT property: write without response (0x04).
+pub const PROP_WRITE_NO_RESPONSE: u8 = 0x04;
+
+/// BLE GATT property: write (0x08).
+pub const PROP_WRITE: u8 = 0x08;
+
 /// BLE GATT property: notify (0x10).
 pub const PROP_NOTIFY: u8 = 0x10;
 
@@ -41,18 +47,38 @@ pub struct GattHandles {
     pub pressure: Option<u16>,
 }
 
+/// Property bits that mark an LS line as carrying the characteristic *value*
+/// handle (as opposed to a descriptor). A line with none of these is a CCCD
+/// descriptor line and must not be used as an SHW target.
+const VALUE_HANDLE_PROPERTIES: u8 = PROP_READ | PROP_WRITE | PROP_WRITE_NO_RESPONSE;
+
 /// Callback for `query_multiline(ListServices, ...)`.
 ///
-/// Matches characteristic UUIDs from LS output lines and stores their handles.
+/// Matches characteristic UUIDs from LS output lines and stores their value
+/// handles.
+///
+/// The RN4871 lists a read+notify characteristic as **two** LS lines sharing
+/// the same UUID: the value line (read/write property, e.g. `0x02`) carrying
+/// the handle that `SHW` must target, and the CCCD descriptor line (notify
+/// property `0x10`) whose handle is `value + 1`. Skipping the descriptor line
+/// stops it from overwriting the value handle — writing to the CCCD handle
+/// never triggers a notification.
 pub fn collect_handles(line: &[u8], handles: &mut GattHandles) {
-    if let Some(info) = ls_parser::parse_characteristic_line(line) {
-        if info.uuid_bytes == TEMPERATURE_CHAR_UUID {
-            handles.temperature = Some(info.handle);
-        } else if info.uuid_bytes == PRESSURE_CHAR_UUID {
-            handles.pressure = Some(info.handle);
-        } else {
-            // Unknown characteristic — ignore
-        }
+    let Some(info) = ls_parser::parse_characteristic_line(line) else {
+        return;
+    };
+
+    // Ignore the CCCD descriptor line; only the value line is an SHW target.
+    if info.properties & VALUE_HANDLE_PROPERTIES == 0 {
+        return;
+    }
+
+    if info.uuid_bytes == TEMPERATURE_CHAR_UUID {
+        handles.temperature = Some(info.handle);
+    } else if info.uuid_bytes == PRESSURE_CHAR_UUID {
+        handles.pressure = Some(info.handle);
+    } else {
+        // Unknown characteristic — ignore
     }
 }
 
@@ -73,8 +99,8 @@ mod tests {
 
     #[test]
     fn collect_handles_temperature() -> TestResult {
-        // Given
-        let line = b"  A4E64B8B8DB34E08A7D57D3C3F2E1A01,0072,12";
+        // Given — the RN4871 value line (read property) for temperature
+        let line = b"  A4E64B8B8DB34E08A7D57D3C3F2E1A01,0072,02";
         let mut handles = GattHandles::default();
 
         // When
@@ -92,8 +118,8 @@ mod tests {
 
     #[test]
     fn collect_handles_pressure() -> TestResult {
-        // Given
-        let line = b"  A4E64B8B8DB34E08A7D57D3C3F2E1A02,0075,12";
+        // Given — the RN4871 value line (read property) for pressure
+        let line = b"  A4E64B8B8DB34E08A7D57D3C3F2E1A02,0075,02";
         let mut handles = GattHandles::default();
 
         // When
@@ -114,9 +140,9 @@ mod tests {
 
     #[test]
     fn collect_handles_both() -> TestResult {
-        // Given — simulate two LS output lines
-        let temp_line = b"  A4E64B8B8DB34E08A7D57D3C3F2E1A01,0072,12";
-        let pres_line = b"  A4E64B8B8DB34E08A7D57D3C3F2E1A02,0075,12";
+        // Given — value lines for both characteristics
+        let temp_line = b"  A4E64B8B8DB34E08A7D57D3C3F2E1A01,0072,02";
+        let pres_line = b"  A4E64B8B8DB34E08A7D57D3C3F2E1A02,0075,02";
         let mut handles = GattHandles::default();
 
         // When
@@ -126,6 +152,45 @@ mod tests {
         // Then
         assert_eq!(handles.temperature, Some(0x0072), "temperature handle");
         assert_eq!(handles.pressure, Some(0x0075), "pressure handle");
+        Ok(())
+    }
+
+    #[test]
+    fn collect_handles_keeps_value_handle_over_cccd() -> TestResult {
+        // Given — the real RN4871 LS decomposition: a value line followed by a
+        // CCCD descriptor line for the same UUID (handle = value + 1).
+        let value_line = b"  A4E64B8B8DB34E08A7D57D3C3F2E1A01,0072,02";
+        let cccd_line = b"  A4E64B8B8DB34E08A7D57D3C3F2E1A01,0073,10,0";
+        let mut handles = GattHandles::default();
+
+        // When — both lines arrive in LS order
+        collect_handles(value_line, &mut handles);
+        collect_handles(cccd_line, &mut handles);
+
+        // Then — the value handle wins; the CCCD line must not overwrite it
+        // (writing the CCCD handle via SHW never triggers a notification).
+        assert_eq!(
+            handles.temperature,
+            Some(0x0072),
+            "value handle 0x0072, not CCCD handle 0x0073"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn collect_handles_ignores_lone_cccd_line() -> TestResult {
+        // Given — only a CCCD descriptor line (notify property, no value bits)
+        let cccd_line = b"  A4E64B8B8DB34E08A7D57D3C3F2E1A01,0073,10,0";
+        let mut handles = GattHandles::default();
+
+        // When
+        collect_handles(cccd_line, &mut handles);
+
+        // Then — a descriptor line alone yields no handle
+        assert_eq!(
+            handles.temperature, None,
+            "CCCD descriptor line is not a value handle"
+        );
         Ok(())
     }
 

@@ -13,6 +13,13 @@ pub struct CharacteristicInfo {
     pub uuid_bytes: [u8; 16],
     /// The characteristic handle.
     pub handle: u16,
+    /// The characteristic property bitmap (`0x02` read, `0x10` notify, …).
+    ///
+    /// Defaults to `0` when the LS line omits the property field. The RN4871
+    /// lists a read+notify characteristic as two lines sharing one UUID — the
+    /// value line (`0x02`) and the CCCD descriptor line (`0x10`) — so this
+    /// field is needed to tell the value handle from the CCCD handle.
+    pub properties: u8,
 }
 
 /// Parse a single line from LS output.
@@ -53,7 +60,32 @@ pub fn parse_characteristic_line(line: &[u8]) -> Option<CharacteristicInfo> {
     let handle_hex = &after_comma[..handle_end];
     let handle = encoding::parse_hex_u16(handle_hex)?;
 
-    Some(CharacteristicInfo { uuid_bytes, handle })
+    // Parse the optional property field (third field). Defaults to 0 when absent.
+    let properties = parse_property_field(&after_comma[handle_end..]);
+
+    Some(CharacteristicInfo {
+        uuid_bytes,
+        handle,
+        properties,
+    })
+}
+
+/// Parse the property field that follows the handle in an LS line.
+///
+/// `rest` begins at the comma after the handle (or is empty when the line has
+/// no property field). Returns `0` when the field is absent or unparseable.
+fn parse_property_field(rest: &[u8]) -> u8 {
+    if rest.first() != Some(&b',') {
+        return 0;
+    }
+    let after_comma = &rest[1..];
+    let end = after_comma
+        .iter()
+        .position(|&b| b == b',')
+        .unwrap_or(after_comma.len());
+    encoding::parse_hex_u16(&after_comma[..end])
+        .and_then(|v| u8::try_from(v).ok())
+        .unwrap_or(0)
 }
 
 /// Strip leading ASCII whitespace from a byte slice.
@@ -99,6 +131,7 @@ mod tests {
             "UUID should match"
         );
         assert_eq!(info.handle, 0x0072, "handle should be 0x0072");
+        assert_eq!(info.properties, 0x12, "properties should be 0x12");
         Ok(())
     }
 
@@ -113,6 +146,55 @@ mod tests {
         // Then
         let info = result.expect("should parse 4-field characteristic line");
         assert_eq!(info.handle, 0x0075, "handle should be 0x0075");
+        assert_eq!(info.properties, 0x12, "properties should be 0x12");
+        Ok(())
+    }
+
+    #[test]
+    fn parse_value_line_reports_read_property() -> TestResult {
+        // Given — the RN4871 value line of a read+notify characteristic
+        let line = b"  A4E64B8B8DB34E08A7D57D3C3F2E1A01,0072,02";
+
+        // When
+        let info = parse_characteristic_line(line).expect("should parse value line");
+
+        // Then
+        assert_eq!(info.handle, 0x0072, "value handle should be 0x0072");
+        assert_eq!(
+            info.properties, 0x02,
+            "value line carries the read property"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_cccd_line_reports_notify_property() -> TestResult {
+        // Given — the RN4871 CCCD descriptor line (handle = value + 1)
+        let line = b"  A4E64B8B8DB34E08A7D57D3C3F2E1A01,0073,10,0";
+
+        // When
+        let info = parse_characteristic_line(line).expect("should parse CCCD line");
+
+        // Then
+        assert_eq!(info.handle, 0x0073, "CCCD handle should be 0x0073");
+        assert_eq!(
+            info.properties, 0x10,
+            "CCCD line carries the notify property"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_two_field_line_has_zero_properties() -> TestResult {
+        // Given — a line with no property field
+        let line = b"  A4E64B8B8DB34E08A7D57D3C3F2E1A01,0072";
+
+        // When
+        let info = parse_characteristic_line(line).expect("should parse 2-field line");
+
+        // Then
+        assert_eq!(info.handle, 0x0072, "handle should be 0x0072");
+        assert_eq!(info.properties, 0, "missing property field defaults to 0");
         Ok(())
     }
 
