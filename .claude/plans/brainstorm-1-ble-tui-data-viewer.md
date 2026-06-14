@@ -2,7 +2,7 @@
 
 - **Source:** '1 (`.claude/brainstorm/1-ble-tui-data-viewer.md`)
 - **Date:** 2026-06-14
-- **Status:** Planned
+- **Status:** Done
 
 ## Summary
 
