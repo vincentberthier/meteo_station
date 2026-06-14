@@ -8,6 +8,7 @@ use futures::StreamExt as _;
 use meteo_lib::ble::encoding::decode_f32;
 use meteo_lib::ble::registry::{SENSORS, index_for_uuid};
 use tokio::sync::mpsc::Sender;
+use tokio::sync::watch;
 use tokio::time;
 use uuid::Uuid;
 
@@ -24,7 +25,10 @@ const SCAN_POLL: Duration = Duration::from_millis(200);
 /// Run forever: scan → connect → stream → on drop, rescan.
 /// Returns only on an unrecoverable setup error (no adapter); the UI keeps
 /// running and shows `Scanning`.
-pub async fn run(tx: Sender<ClientEvent>) -> Result<(), Box<dyn Error>> {
+pub async fn run(
+    tx: Sender<ClientEvent>,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<(), Box<dyn Error>> {
     let manager = Manager::new().await?;
     let adapter = first_adapter(&manager).await?;
     loop {
@@ -36,7 +40,10 @@ pub async fn run(tx: Sender<ClientEvent>) -> Result<(), Box<dyn Error>> {
             clippy::let_underscore_must_use,
             reason = "session end/error both mean: rescan"
         )]
-        let _ = session(&adapter, &tx).await;
+        let _ = session(&adapter, &tx, &mut shutdown).await;
+        if *shutdown.borrow() {
+            return Ok(()); // Shutdown requested — stop without sending Disconnected.
+        }
         if tx.send(ClientEvent::Disconnected).await.is_err() {
             return Ok(()); // UI gone (user quit) — stop.
         }
@@ -54,9 +61,13 @@ async fn first_adapter(manager: &Manager) -> Result<Adapter, Box<dyn Error>> {
 
 /// One connection lifecycle: wait for the device, connect, subscribe to every
 /// registered NOTIFY characteristic, then forward readings until the stream
-/// ends (disconnect).
-async fn session(adapter: &Adapter, tx: &Sender<ClientEvent>) -> Result<(), Box<dyn Error>> {
-    let device = wait_for_station(adapter).await?;
+/// ends (disconnect) or shutdown is requested.
+async fn session(
+    adapter: &Adapter,
+    tx: &Sender<ClientEvent>,
+    shutdown: &mut watch::Receiver<bool>,
+) -> Result<(), Box<dyn Error>> {
+    let device = wait_for_station(adapter, shutdown).await?;
     device.connect().await?;
     device.discover_services().await?;
 
@@ -90,15 +101,26 @@ async fn session(adapter: &Adapter, tx: &Sender<ClientEvent>) -> Result<(), Box<
     tx.send(ClientEvent::Connected).await?;
 
     let mut events = device.notifications().await?;
-    while let Some(n) = events.next().await {
-        if let Some(index) = index_for_uuid(n.uuid.as_bytes())
-            && let Some(raw) = decode_reading(&n.value)
-            && tx.send(ClientEvent::Reading { index, raw }).await.is_err()
-        {
-            break; // UI gone — let `run` observe the closed channel.
+    loop {
+        tokio::select! {
+            maybe = events.next() => {
+                let Some(n) = maybe else { break }; // stream ended → disconnect
+                if let Some(index) = index_for_uuid(n.uuid.as_bytes())
+                    && let Some(raw) = decode_reading(&n.value)
+                    && tx.send(ClientEvent::Reading { index, raw }).await.is_err()
+                {
+                    break; // UI gone — let `run` observe the closed channel.
+                }
+            }
+            changed = shutdown.changed() => {
+                // changed() returns Err if the sender dropped (UI gone) — treat as shutdown.
+                if changed.is_err() || *shutdown.borrow() {
+                    break;
+                }
+            }
         }
     }
-    // Stream ended → device disconnected. Best-effort tidy disconnect.
+    // Stream ended or shutdown → device disconnected. Best-effort tidy disconnect.
     #[expect(
         clippy::let_underscore_must_use,
         reason = "tidy disconnect; already disconnected if this errors"
@@ -109,7 +131,11 @@ async fn session(adapter: &Adapter, tx: &Sender<ClientEvent>) -> Result<(), Box<
 
 /// Scan, polling `peripherals()` until a `MeteoStation` appears. Waits as long
 /// as needed (the device may be powered off); the UI shows `Scanning`.
-async fn wait_for_station(adapter: &Adapter) -> Result<Peripheral, Box<dyn Error>> {
+/// Returns `Err` immediately if shutdown is requested.
+async fn wait_for_station(
+    adapter: &Adapter,
+    shutdown: &mut watch::Receiver<bool>,
+) -> Result<Peripheral, Box<dyn Error>> {
     adapter.start_scan(ScanFilter::default()).await?;
     loop {
         for p in adapter.peripherals().await? {
@@ -127,7 +153,19 @@ async fn wait_for_station(adapter: &Adapter) -> Result<Peripheral, Box<dyn Error
                 return Ok(p);
             }
         }
-        time::sleep(SCAN_POLL).await;
+        tokio::select! {
+            () = time::sleep(SCAN_POLL) => {}
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "best-effort scan stop on shutdown"
+                    )]
+                    let _ = adapter.stop_scan().await;
+                    return Err("shutdown requested during scan".into());
+                }
+            }
+        }
     }
 }
 
