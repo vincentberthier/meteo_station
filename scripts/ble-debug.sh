@@ -86,9 +86,18 @@ for ((i = 1; i <= MAX_FIND_ATTEMPTS; i++)); do
     cli_rc=${PIPESTATUS[0]}
     set -e
     cat "$attempt_log" >>"$CLI_LOG"
-    if [[ $cli_rc -ne 0 ]] && grep -q "MeteoStation not found" "$attempt_log"; then
+    # Retry transient pre-session failures, but not a genuine error (e.g. a
+    # missing characteristic), which should surface immediately:
+    #   - "MeteoStation not found": device not advertising yet.
+    #   - "le-connection-abort-by-local": BlueZ aborts the connection attempt
+    #     locally (HCI 0x3e, Connection Failed to be Established) — a recurring
+    #     Gaia controller establishment flake, unrelated to the firmware.
+    #   - "Error.Timeout"/"Timeout waiting for reply": BlueZ D-Bus call times
+    #     out mid-connect, another face of the same establishment flake.
+    if [[ $cli_rc -ne 0 ]] &&
+        grep -Eq "MeteoStation not found|le-connection-abort-by-local|Timeout waiting for reply" "$attempt_log"; then
         rm -f "$attempt_log"
-        continue # device not advertising yet (distinct from a missing-char error)
+        continue
     fi
     rm -f "$attempt_log"
     break
