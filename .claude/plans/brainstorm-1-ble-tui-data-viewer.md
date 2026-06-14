@@ -895,7 +895,7 @@ reason = ...)]` in the sketches — not a bare discard.
 Progress tracking (checked off during `/tyrex:code:implement-light`):
 
 - [x] 1. Sensor registry in `meteo-lib` (`ble::registry`) + re-exports + 6 tests — `SensorDescriptor`/`SENSORS`/`index_for_uuid`/`pa_to_hpa`, re-exported from `ble::mod`; 6 tests pass.
-- [ ] 2. Scaffold `meteo-tui` crate, workspace member, Justfile recipes/clippy/test
+- [x] 2. Scaffold `meteo-tui` crate, workspace member, Justfile recipes/clippy/test — stub `main.rs` + placeholder modules; single crossterm 0.29 confirmed; builds + clippy clean.
 - [ ] 3. `app.rs` state & logic + 10 unit tests
 - [ ] 4. `client.rs` auto-reconnecting btleplug central + 2 `decode_reading` tests
 - [ ] 5. `ui.rs` registry-driven rendering + 5 chart-axis helper tests

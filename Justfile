@@ -58,6 +58,14 @@ ble-debug:
 cli-gaia:
     ssh gaia "bash -c 'cd ~/code/meteo_station && cargo run -q -p meteo-cli --target {{ host_target }}'"
 
+[doc('Run the BLE TUI viewer')]
+tui:
+    cargo run -p meteo-tui --target {{ host_target }}
+
+[doc('Run the BLE TUI viewer on the Gaia host (the machine with the BT adapter)')]
+tui-gaia:
+    ssh gaia "bash -c 'cd ~/code/meteo_station && cargo run -q -p meteo-tui --target {{ host_target }}'"
+
 # --- Code quality recipes ---
 
 [doc('Format code')]
@@ -70,8 +78,8 @@ format:
 [doc('Check code with clippy')]
 clippy:
     cargo clippy -p meteo-firmware -- -D warnings
-    cargo clippy -p meteo-lib -p meteo-cli --target {{ host_target }} -- -D warnings
+    cargo clippy -p meteo-lib -p meteo-cli -p meteo-tui --target {{ host_target }} -- -D warnings
 
 [doc('Run tests on host')]
 test:
-    cargo nextest run --lib --target x86_64-unknown-linux-gnu
+    cargo nextest run -p meteo-lib -p meteo-cli -p meteo-tui --target {{ host_target }}

@@ -3,6 +3,7 @@ members = [
     "crates/meteo-lib",
     "crates/meteo-firmware",
     "crates/meteo-cli",
+    "crates/meteo-tui",
 ]
 resolver = "2"
 
