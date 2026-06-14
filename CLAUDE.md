@@ -127,6 +127,21 @@ Pin reference: `datasheets/nucleo_pins.csv`.
 | USART2_CTS (RN4871) | PD3       | CN9 pin 10 (D55)  | USART_B_CTS | USART2     |
 | BLE RST_N (RN4871)  | PA4       | CN7 pin 17 (D24)  | SPI_B_NSS   | GPIO       |
 
+## Debugging & Accountability Principles
+
+These are permanent rules for any debugging or troubleshooting on this project:
+
+- **Do not blame the hosts.** They work perfectly fine. If — and only if — you wedge
+  something, you may _request_ a sub-system reboot. Never assert a host is at fault.
+- **Do not blame the hardware** except as a last resort, after you have exhausted _all_
+  other explanations.
+- **Fix the system, not the symptom.** A stack of patches is not wanted. When something
+  doesn't work, fix the system in its entirety — not whichever little thing happened to
+  trip the diagnostics.
+- **Reading code is a short part of problem-solving.** If the cause isn't quickly obvious
+  from the code, stop reading and reach for web searches, better/more diagnostics, and
+  throwaway test scripts instead.
+
 ## Code Standards
 
 Use `defmt` macros for logging (`defmt::info!`, `defmt::error!`, etc.) - outputs via RTT over JTAG.
