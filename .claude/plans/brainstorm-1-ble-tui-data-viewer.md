@@ -901,7 +901,13 @@ Progress tracking (checked off during `/tyrex:code:implement-light`):
 - [x] 5. `ui.rs` registry-driven rendering + 5 chart-axis helper tests — `render`/`render_status`/`render_sensor` + pure `y_bounds`/`x_axis_max`; ratatui 0.30 API confirmed; 5 tests pass. Carries a temporary `#![expect(dead_code)]` to remove in substep 6 (all three modules — app, client, ui — carry it).
 - [x] 6. `main.rs` terminal lifecycle + event loop wiring — `ratatui::init/restore`, spawned client task, `select!` over readings + key input, event-driven redraw, q/Esc quit. Removed all three temporary `#![expect(dead_code)]`; `SensorState::len`/`is_empty` (test-only, clippy-paired) carry a targeted `#[cfg_attr(not(test), expect(dead_code))]`.
 - [x] All checks green (fmt, clippy host+firmware, nextest, firmware release build) — verified in substep 6's full gate.
-- [ ] Manual verification on Gaia (live values, charts, reconnect, quit) — pending: this dev machine has no BT adapter; the board is on `hephaistos`. Run `just tui-gaia` with the device powered and in range of Gaia.
+- [x] Manual verification on Gaia (live values, charts, quit) — verified 2026-06-14 on `gaia` (station reset via `just reset` on `hephaistos`, MAC `80:1F:12:B6:60:BF`). Driven through a sized PTY harness: status `● Connected`; Temperature `24.59 °C` (min/max + braille history curve, axis labels); Pressure `1009.57 hPa` with the Pa→hPa registry transform applied live; both panels registry-driven; terminal lifecycle enters/restores the alternate screen and quits cleanly on `q` (exit 0).
+- [ ] Reconnect across the firmware's ~30 s disconnect — NOT verified live (the harness window was shorter than the disconnect cycle); logic is `App::apply(Disconnected)` keeping history + `client::run` rescan loop, unit-tested.
+
+**Findings from live verification (follow-ups, not blockers):**
+
+- The left readout column is `Constraint::Length(24)` — too narrow for the full `min … max … avg …` line, so **`avg` is clipped** (for pressure even `max` is truncated). The value is computed and unit-tested; only the display is cut. Fix: widen the column (~36) or wrap stats onto a second line.
+- The TUI does **not** issue a clean BLE disconnect on quit: on `q`, `main` returns and the spawned client task is dropped mid-`notifications().next()` without calling `device.disconnect()`. This can leave a stale link on the central adapter (`le-connection-abort-by-local` on the next connect until BlueZ/the firmware ~30 s timeout clears it). Consider a shutdown signal that lets the session call `device.disconnect()` before exit.
 
 Follow-up (out of scope, enabled by this work): refactor `meteo-firmware`'s
 `ble.rs` and `gatt::collect_handles` to iterate `ble::registry::SENSORS` instead
