@@ -2,7 +2,7 @@
 
 - **Source:** '1 (`.claude/brainstorm/1-ble-module-design.md`)
 - **Date:** 2026-06-14
-- **Status:** Planned
+- **Status:** Done
 
 ## Summary
 
@@ -858,12 +858,12 @@ saturation, out-of-range registry index (already handled by `App::apply`).
 
 Progress tracking (checked during `/tyrex:code:implement-light`):
 
-- [ ] 1. Shared wire-frame codec (`meteo-lib/src/ble/frame.rs` + constants)
-- [ ] 2. RN4871 driver (`meteo-lib/src/ble/rn4871.rs`)
-- [ ] 3. Firmware BLE task + supervisor (`meteo-firmware/src/ble.rs`, `main.rs`)
-- [ ] 4. BMP388 task feeds `SENSOR_CHANNEL` (`bmp.rs`)
-- [ ] 5. `bluer` central transport (`meteo-tui/src/feed.rs`, `sensors.rs`)
-- [ ] 6. Documentation (`CLAUDE.md`)
+- [x] 1. Shared wire-frame codec (`meteo-lib/src/ble/frame.rs` + constants) — 17-byte LE codec, sentinels, `present_fields` (pressure in Pa), `FrameField`; 9 host tests; added `heapless`/`embedded-hal`/`embedded-io-async`/`libm` deps. Spec review: pass.
+- [x] 2. RN4871 driver (`meteo-lib/src/ble/rn4871.rs`) — async ASCII driver over `embedded-io-async`: command/response (No-Prompt), event buffering, provisioning, `LS` handle discovery, `SHW` hex push; 9 fake-based host tests. Spec review: pass.
+- [x] 3. Firmware BLE task + supervisor (`meteo-firmware/src/ble.rs`, `main.rs`) — USART2 `BufferedUart` + `RST_N` (PA4), `SENSOR_CHANNEL`, `ble_task` with `select`-based supervisor + `bring_up`/`recover`. DEVIATION: pure `SensorSample`/`apply_sample` moved to `meteo-lib::ble::sample` (host-testable; firmware crate is arm-only and never host-tested) — 2 purity tests there. Spec review: pass.
+- [x] 4. BMP388 task feeds `SENSOR_CHANNEL` (`bmp.rs`) — publishes `SensorSample::Barometer` each reading (done inline; arm clippy + build pass).
+- [x] 5. `bluer` central transport (`meteo-tui/src/feed.rs`, `sensors.rs`) — scan→connect→discover→subscribe→decode→reconnect state machine, shutdown-aware; `field_to_index` mapping; 2 host tests. Spec review (inline): pass.
+- [x] 6. Documentation (`CLAUDE.md`) — module tree, BLE wire contract, verify-and-repair provisioning, gaia testing note.
 
 Open implementation choices left to the implementer (non-blocking):
 

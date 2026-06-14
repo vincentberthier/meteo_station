@@ -6,6 +6,9 @@ Currently supports:
 
 - BMP388 barometric pressure/temperature sensor (via I2C1)
 - LED indicators (onboard and external)
+- BLE telemetry link via an RN4871 module (USART2): the firmware advertises a
+  custom GATT service and pushes one measurement frame per second; the
+  `meteo-tui` viewer is a BlueZ central that subscribes and decodes the frames.
 
 ## Build Commands
 
@@ -65,20 +68,36 @@ crates/
 ├── meteo-firmware/        # Binary crate: STM32H753ZI-specific
 │   ├── build.rs
 │   └── src/
-│       └── main.rs        # Hardware init, interrupt bindings, task spawning
-└── meteo-lib/             # Library crate: hardware-agnostic
+│       ├── main.rs        # Hardware init, interrupt bindings, task spawning
+│       ├── bmp.rs         # BMP388 task; publishes samples to SENSOR_CHANNEL
+│       └── ble.rs         # SENSOR_CHANNEL + ble_task (provision + supervisor)
+├── meteo-lib/             # Library crate: hardware-agnostic
+│   └── src/
+│       ├── lib.rs         # Re-exports sensor drivers and utilities
+│       ├── utils.rs       # Utility functions (trunc2, etc.)
+│       ├── sensors/
+│       │   ├── mod.rs     # Sensor module root
+│       │   └── bmp388.rs  # BMP388 pressure/temperature driver
+│       └── ble/
+│           ├── mod.rs     # Shared BLE constants (UUIDs, device name)
+│           ├── frame.rs   # 17-byte wire-frame codec (encode/decode) + Frame
+│           ├── sample.rs  # SensorSample + apply_sample (pure, host-tested)
+│           └── rn4871.rs  # RN4871 async ASCII driver (embedded-io-async)
+└── meteo-tui/             # Host TUI viewer: BlueZ central (bluer)
     └── src/
-        ├── lib.rs         # Re-exports sensor drivers and utilities
-        ├── utils.rs       # Utility functions (trunc2, etc.)
-        └── sensors/
-            ├── mod.rs     # Sensor module root
-            └── bmp388.rs  # BMP388 pressure/temperature driver
+        ├── feed.rs        # scan → connect → subscribe → decode → reconnect
+        └── sensors.rs     # SENSORS registry + field_to_index mapping
 ```
 
 **Library vs Binary separation:**
 
-- `meteo-lib`: Hardware-agnostic drivers using `embedded-hal-async` traits
+- `meteo-lib`: Hardware-agnostic drivers using `embedded-hal-async` /
+  `embedded-io-async` traits. The `ble` module is the single source of truth for
+  the wire contract — the frame codec is shared by firmware (encode) and the
+  `meteo-tui` central (decode) so the two sides cannot drift.
 - `meteo-firmware`: STM32H753ZI-specific hardware initialization and Embassy tasks
+- `meteo-tui`: host-only viewer (tokio + ratatui + `bluer`); builds for the host
+  target, not the embedded one
 
 ### Static Resource Pattern
 
@@ -87,6 +106,41 @@ Hardware resources use `StaticCell<Mutex<...>>` for safe sharing between tasks:
 ```rust
 static SPI1: StaticCell<Mutex<ThreadModeRawMutex, ...>> = StaticCell::new();
 ```
+
+### BLE Link (RN4871)
+
+The wire contract lives in `meteo-lib::ble` and is shared by both sides:
+
+- **Service/characteristic.** A custom 128-bit GATT service
+  (`SERVICE_UUID`/`CHAR_UUID` in `ble/mod.rs`) with one Notify characteristic.
+  The UUIDs are defined once as `u128`; the firmware formats them to 32-char hex
+  for the RN4871 `PS`/`PC` commands, the central builds `uuid::Uuid::from_u128`.
+- **Frame.** A fixed 17-byte, little-endian, schema-v1 packet of scaled integers
+  (byte 0 is the schema version). Absent sensors use per-field sentinels
+  (`i16::MIN` / `u16::MAX` / `u8::MAX`) that decode to `None`. `Frame::encode`
+  and `Frame::decode` are the only place units/scaling/sentinels are defined.
+  Pressure is carried as Pa so the central's `pa_to_hpa` registry transform stays
+  correct. The 20-byte ATT default is the ceiling — the v1 frame uses 17 of 20.
+- **Provisioning is verify-and-repair.** At boot the driver reads the module's
+  current config and only writes the set-commands + `WR` + reboot when it differs
+  from desired. The RN4871 runs in No-Prompt mode (`SR,4000`): there is no `CMD>`
+  terminator, so command responses key off `AOK`/`ERR`.
+- **Supervisor.** `ble_task` provisions once, then pushes one frame per
+  `SENSOR_CHANNEL` sample and re-advertises on disconnect. A `RST_N` (PA4) pulse
+  is the wedge-recovery circuit-breaker — used only on the explicit error path.
+
+The firmware ↔ central seam is `ClientEvent` (`meteo-tui`); the central maps only
+the frame fields the registry presents (Temperature, Pressure today) via
+`sensors::field_to_index`, dropping the rest until that hardware exists.
+
+#### Testing the BLE link
+
+The frame codec and driver are host-tested (`just test`). The full radio path is
+not: the dev box has no Bluetooth radio, so run the `meteo-tui` central on
+**gaia** (`D8:F3:BC:63:2E:56`, BlueZ 5.86) over SSH — `just tui` there. Confirm
+`MeteoStation` advertising with `bluetoothctl` first. **Never reboot gaia.**
+`bluer` pulls a large D-Bus dependency tree and only needs to compile/run where a
+radio exists; host CI covers the pure-logic tests only.
 
 ### Target Configuration
 
