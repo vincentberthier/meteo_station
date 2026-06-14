@@ -20,6 +20,15 @@ use meteo_lib::ble::{
 };
 use meteo_lib::bmp388::Reading;
 
+/// Per-operation timeout for command-mode SHW handshakes.
+///
+/// This is a deadlock circuit-breaker, not a synchronization delay: each
+/// command-mode op normally completes in well under 100 ms, but if a handshake
+/// marker (`CMD>`/`AOK`/`END`) never arrives, the underlying `wait_for_*` loop
+/// would otherwise block the task forever. The bound is generous versus the
+/// typical handshake yet well under the BLE supervision timeout (~5 s).
+const CMD_OP_TIMEOUT: Duration = Duration::from_millis(500);
+
 /// Adapter wrapping Embassy's [`BufferedUart`] to implement the BLE [`Uart`] trait.
 pub struct EmbassyUart {
     inner: BufferedUart<'static>,
@@ -247,6 +256,10 @@ pub async fn ble_task(
 
     // --- Monitoring loop: borrow-safe structure ---
     let mut connected = false;
+    // `subscribed` tracks whether the client has enabled notifications (written
+    // the CCCD) on one of our characteristics. We only push (enter command mode
+    // for SHW) once subscribed — see Phase 2 for why.
+    let mut subscribed = false;
     let mut line_buf = LineBuffer::<256>::new();
     let mut rx_buf = [0_u8; 64];
 
@@ -279,12 +292,21 @@ pub async fn ble_task(
                     StatusEvent::Disconnect => {
                         info!("BLE: disconnected");
                         connected = false;
+                        subscribed = false;
                     }
                     StatusEvent::WriteConfig { handle, data } => {
-                        debug!(
-                            "BLE: CCCD write handle={=u16:04X} data={}",
+                        // CCCD value is little-endian ASCII hex: "0100" = notify
+                        // enabled, "0000" = disabled. Any notify-enable means the
+                        // client is ready to receive — unblock Phase 2.
+                        let notify_enabled = data.starts_with(b"01");
+                        if notify_enabled {
+                            subscribed = true;
+                        }
+                        info!(
+                            "BLE: CCCD write handle={=u16:04X} data={} (notify={=bool})",
                             handle,
-                            str::from_utf8(data).unwrap_or("?")
+                            str::from_utf8(data).unwrap_or("?"),
+                            notify_enabled
                         );
                     }
                     other => debug!("BLE: {:?}", other),
@@ -296,9 +318,18 @@ pub async fn ble_task(
             Err(_) => {} // timeout — fall through to check sensor data
         }
 
-        // Phase 2: push sensor data when connected.
+        // Phase 2: push sensor data once the client has subscribed.
+        //
+        // We gate on `subscribed`, not merely `connected`: entering command mode
+        // (`$$$`) makes the RN4871 stop answering GATT requests, so doing it
+        // during the client's service discovery / initial reads stalls those
+        // procedures and the link drops on supervision timeout. By waiting for
+        // the CCCD-write (`%WC%`) that subscription produces, discovery is
+        // already complete before we ever enter command mode. Each op is bounded
+        // by `CMD_OP_TIMEOUT` so a missing handshake marker can't wedge the task.
         // ble is no longer borrowed here — safe to call driver methods.
         if connected
+            && subscribed
             && let Ok(reading) = sensor_channel.try_receive()
             && let (Some(t_handle), Some(p_handle)) = (handles.temperature, handles.pressure)
         {
@@ -308,36 +339,47 @@ pub async fn ble_task(
                 "BLE: pushing sensor data (t={=f32}, p={=f32}) via SHW; entering command mode",
                 reading.temperature, reading.pressure
             );
-            if let Err(e) = ble.enter_command_mode().await {
-                warn!("BLE: cmd mode failed: {:?}", Debug2Format(&e));
-                continue;
+            match embassy_time::with_timeout(CMD_OP_TIMEOUT, ble.enter_command_mode()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    warn!("BLE: cmd mode failed: {:?}", Debug2Format(&e));
+                    continue;
+                }
+                Err(_) => {
+                    warn!("BLE: enter command mode timed out; skipping push");
+                    continue;
+                }
             }
-            if let Err(e) = ble
-                .execute(Command::ServerWrite {
+            match embassy_time::with_timeout(
+                CMD_OP_TIMEOUT,
+                ble.execute(Command::ServerWrite {
                     handle: t_handle,
                     data: &t_bytes,
-                })
-                .await
+                }),
+            )
+            .await
             {
-                warn!("BLE: temp write failed: {:?}", Debug2Format(&e));
-            } else {
-                info!("BLE: temp SHW ok (handle={=u16:04X})", t_handle);
+                Ok(Ok(())) => info!("BLE: temp SHW ok (handle={=u16:04X})", t_handle),
+                Ok(Err(e)) => warn!("BLE: temp write failed: {:?}", Debug2Format(&e)),
+                Err(_) => warn!("BLE: temp SHW timed out"),
             }
-            if let Err(e) = ble
-                .execute(Command::ServerWrite {
+            match embassy_time::with_timeout(
+                CMD_OP_TIMEOUT,
+                ble.execute(Command::ServerWrite {
                     handle: p_handle,
                     data: &p_bytes,
-                })
-                .await
+                }),
+            )
+            .await
             {
-                warn!("BLE: pressure write failed: {:?}", Debug2Format(&e));
-            } else {
-                info!("BLE: pressure SHW ok (handle={=u16:04X})", p_handle);
+                Ok(Ok(())) => info!("BLE: pressure SHW ok (handle={=u16:04X})", p_handle),
+                Ok(Err(e)) => warn!("BLE: pressure write failed: {:?}", Debug2Format(&e)),
+                Err(_) => warn!("BLE: pressure SHW timed out"),
             }
-            if let Err(e) = ble.exit_command_mode().await {
-                warn!("BLE: exit cmd mode failed: {:?}", Debug2Format(&e));
-            } else {
-                info!("BLE: exited command mode after SHW");
+            match embassy_time::with_timeout(CMD_OP_TIMEOUT, ble.exit_command_mode()).await {
+                Ok(Ok(())) => info!("BLE: exited command mode after SHW"),
+                Ok(Err(e)) => warn!("BLE: exit cmd mode failed: {:?}", Debug2Format(&e)),
+                Err(_) => warn!("BLE: exit command mode timed out"),
             }
         }
     }
