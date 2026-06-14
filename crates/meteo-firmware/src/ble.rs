@@ -265,8 +265,21 @@ pub async fn ble_task(
                 line_buf.push_bytes(&rx_buf[..n]);
                 // Extract %...% status events
                 while line_buf.process_status_event(|event| match parse_status_event(event) {
-                    StatusEvent::Connect { .. } => connected = true,
-                    StatusEvent::Disconnect => connected = false,
+                    StatusEvent::Connect {
+                        address_type,
+                        address,
+                    } => {
+                        info!(
+                            "BLE: connected (type={=u8}, addr={})",
+                            address_type,
+                            str::from_utf8(address).unwrap_or("?")
+                        );
+                        connected = true;
+                    }
+                    StatusEvent::Disconnect => {
+                        info!("BLE: disconnected");
+                        connected = false;
+                    }
                     StatusEvent::WriteConfig { handle, data } => {
                         debug!(
                             "BLE: CCCD write handle={=u16:04X} data={}",
@@ -291,6 +304,10 @@ pub async fn ble_task(
         {
             let t_bytes = encode_f32(reading.temperature);
             let p_bytes = encode_f32(reading.pressure);
+            info!(
+                "BLE: pushing sensor data (t={=f32}, p={=f32}) via SHW; entering command mode",
+                reading.temperature, reading.pressure
+            );
             if let Err(e) = ble.enter_command_mode().await {
                 warn!("BLE: cmd mode failed: {:?}", Debug2Format(&e));
                 continue;
@@ -303,6 +320,8 @@ pub async fn ble_task(
                 .await
             {
                 warn!("BLE: temp write failed: {:?}", Debug2Format(&e));
+            } else {
+                info!("BLE: temp SHW ok (handle={=u16:04X})", t_handle);
             }
             if let Err(e) = ble
                 .execute(Command::ServerWrite {
@@ -312,9 +331,13 @@ pub async fn ble_task(
                 .await
             {
                 warn!("BLE: pressure write failed: {:?}", Debug2Format(&e));
+            } else {
+                info!("BLE: pressure SHW ok (handle={=u16:04X})", p_handle);
             }
             if let Err(e) = ble.exit_command_mode().await {
                 warn!("BLE: exit cmd mode failed: {:?}", Debug2Format(&e));
+            } else {
+                info!("BLE: exited command mode after SHW");
             }
         }
     }
