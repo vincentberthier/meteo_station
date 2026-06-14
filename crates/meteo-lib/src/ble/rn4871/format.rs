@@ -36,6 +36,12 @@ fn format_ascii(data: &[u8], f: defmt::Formatter<'_>) {
 }
 
 impl defmt::Format for StatusEvent<'_> {
+    #[allow(
+        clippy::match_same_arms,
+        reason = "arms emit distinct string literals via defmt::write!; clippy compares \
+                  the macro-expanded HIR (interned-string handling) and false-positives \
+                  them as identical"
+    )]
     fn format(&self, f: defmt::Formatter<'_>) {
         match self {
             Self::Reboot => defmt::write!(f, "Reboot"),
