@@ -6,8 +6,6 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-meteo-lib = { workspace = true }
-btleplug = "0.11"
 ratatui = "0.30"
 # Bare crossterm dep exists only to switch on the `event-stream` feature; all
 # crossterm *types* are imported via `ratatui::crossterm` so there is a single
@@ -17,7 +15,6 @@ ratatui = "0.30"
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
-uuid = "1"
 
 [lints]
 workspace = true

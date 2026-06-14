@@ -1,5 +1,4 @@
 //! Registry-driven ratatui rendering.
-use meteo_lib::ble::registry::{SENSORS, SensorDescriptor};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
@@ -8,6 +7,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph};
 
 use crate::app::{App, ConnectionStatus, SensorState};
+use crate::sensors::{SENSORS, SensorDescriptor};
 
 /// Render the full frame: a status line, then one row per registered sensor.
 pub fn render(frame: &mut Frame, app: &App) {

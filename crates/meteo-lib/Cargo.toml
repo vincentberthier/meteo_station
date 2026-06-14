@@ -7,7 +7,6 @@ license.workspace = true
 
 [features]
 defmt = ["dep:defmt"]
-factory-reset = []
 
 [dependencies]
 defmt = { workspace = true, optional = true }

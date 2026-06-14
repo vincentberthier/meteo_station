@@ -1,6 +1,7 @@
-//! BLE TUI viewer for the `MeteoStation` weather station.
+//! TUI viewer for the `MeteoStation` weather station.
 mod app;
-mod client;
+mod feed;
+mod sensors;
 mod ui;
 
 use std::io;
@@ -27,14 +28,14 @@ async fn run(terminal: &mut DefaultTerminal) -> io::Result<()> {
     let mut app = App::new();
     let (tx, mut rx) = mpsc::channel::<ClientEvent>(64);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    // Auto-reconnect client runs in its own task; if it can't start (no
-    // adapter) the UI still runs and shows `Scanning`.
-    let client_task = tokio::spawn(async move {
+    // The data feed runs in its own task. With no transport wired yet it
+    // produces nothing and the UI shows `Scanning`; see `feed.rs`.
+    let feed_task = tokio::spawn(async move {
         #[expect(
             clippy::let_underscore_must_use,
-            reason = "client exits only when the UI is gone; nothing to report"
+            reason = "feed exits only when the UI is gone; nothing to report"
         )]
-        let _ = client::run(tx, shutdown_rx).await;
+        let _ = feed::run(tx, shutdown_rx).await;
     });
 
     let mut input = EventStream::new();
@@ -46,7 +47,7 @@ async fn run(terminal: &mut DefaultTerminal) -> io::Result<()> {
                 if let Some(event) = maybe_event {
                     app.apply(event);
                 }
-                // `None` = client task ended; keep the UI up.
+                // `None` = feed task ended; keep the UI up.
             }
             maybe_input = input.next() => {
                 if let Some(Ok(Event::Key(key))) = maybe_input
@@ -63,19 +64,19 @@ async fn run(terminal: &mut DefaultTerminal) -> io::Result<()> {
         terminal.draw(|f| ui::render(f, &app))?;
     }
 
-    // Signal the client task to stop and wait for it to clean up the BLE link.
+    // Signal the feed task to stop and wait for it to tear down.
     #[expect(
         clippy::let_underscore_must_use,
-        reason = "client may have already exited"
+        reason = "feed may have already exited"
     )]
     let _ = shutdown_tx.send(true);
-    // Bounded deadlock circuit-breaker: if the BLE disconnect hangs, we
-    // proceed after 2 s rather than blocking quit indefinitely.
+    // Bounded deadlock circuit-breaker: if teardown hangs, proceed after 2 s
+    // rather than blocking quit indefinitely.
     #[expect(
         clippy::let_underscore_must_use,
         reason = "best-effort clean teardown before exit"
     )]
-    let _ = timeout(Duration::from_secs(2), client_task).await;
+    let _ = timeout(Duration::from_secs(2), feed_task).await;
 
     Ok(())
 }

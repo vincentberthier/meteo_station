@@ -17,7 +17,6 @@
     reason = "firmware main: no recovery from failed spawn or peripheral init"
 )]
 
-mod ble;
 mod bmp;
 mod leds;
 
@@ -25,26 +24,14 @@ use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::i2c::{Config as I2cConfig, I2c};
-use embassy_stm32::usart::{BufferedUart, Config as UsartConfig};
 use embassy_stm32::{Config, bind_interrupts, peripherals};
-use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
-use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
-use meteo_lib::bmp388::Reading;
-use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
     I2C1_EV => embassy_stm32::i2c::EventInterruptHandler<peripherals::I2C1>;
     I2C1_ER => embassy_stm32::i2c::ErrorInterruptHandler<peripherals::I2C1>;
 });
-
-bind_interrupts!(struct UsartIrqs {
-    USART2 => embassy_stm32::usart::BufferedInterruptHandler<peripherals::USART2>;
-});
-
-/// Channel for passing sensor readings from the barometer task to the BLE task.
-static SENSOR_CHANNEL: Channel<ThreadModeRawMutex, Reading, 1> = Channel::new();
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -77,32 +64,8 @@ async fn main(spawner: Spawner) {
         p.I2C1, p.PB8, p.PB9, Irqs, p.DMA1_CH0, p.DMA1_CH1, i2c_config,
     );
     spawner
-        .spawn(bmp::read_barometer(i2c, &SENSOR_CHANNEL))
+        .spawn(bmp::read_barometer(i2c))
         .expect("read_barometer already spawned");
-
-    // USART2 for RN4871 BLE module (buffered, interrupt-driven):
-    //   D53 (pin 6)  = USART_B_TX  = PD5
-    //   D52 (pin 4)  = USART_B_RX  = PD6
-    // RST_N on D24 (CN7 pin 17) = PA4
-    let usart_config = UsartConfig::default(); // 115200 8N1
-    static TX_BUF: StaticCell<[u8; 256]> = StaticCell::new();
-    static RX_BUF: StaticCell<[u8; 256]> = StaticCell::new();
-    let tx_buf = TX_BUF.init([0_u8; 256]);
-    let rx_buf = RX_BUF.init([0_u8; 256]);
-    let ble_uart = BufferedUart::new(
-        p.USART2,
-        p.PD6,
-        p.PD5,
-        tx_buf,
-        rx_buf,
-        UsartIrqs,
-        usart_config,
-    )
-    .expect("USART2 configuration failed");
-    let ble_rst_n = Output::new(p.PA4, Level::High, Speed::Low);
-    spawner
-        .spawn(ble::ble_task(ble_uart, ble_rst_n, &SENSOR_CHANNEL))
-        .expect("ble_task already spawned");
 
     info!("Init complete!");
 

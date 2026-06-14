@@ -1,6 +1,5 @@
 #![no_std]
 
-pub mod ble;
 pub mod sensors;
 pub mod utils;
 

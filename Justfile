@@ -42,29 +42,9 @@ run: build
 reset:
     probe-rs reset --chip {{ chip }} --connect-under-reset
 
-[doc('Run the BLE client CLI')]
-cli:
-    cargo run -p meteo-cli --target {{ host_target }}
-
-# --- BLE debug recipes ---
-
-# Full cross-machine BLE capture: RTT here + HCI trace & meteo-cli on Gaia.
-# See CLAUDE.md "BLE debugging on Gaia" for prerequisites.
-[doc('Run a full cross-machine BLE debug capture (probe here, BT adapter on Gaia)')]
-ble-debug:
-    ./scripts/ble-debug.sh
-
-[doc('Run the BLE client CLI on the Gaia host (the machine with the BT adapter)')]
-cli-gaia:
-    ssh gaia "bash -c 'cd ~/code/meteo_station && cargo run -q -p meteo-cli --target {{ host_target }}'"
-
-[doc('Run the BLE TUI viewer')]
+[doc('Run the TUI viewer')]
 tui:
     cargo run -p meteo-tui --target {{ host_target }}
-
-[doc('Run the BLE TUI viewer on the Gaia host (the machine with the BT adapter)')]
-tui-gaia:
-    ssh gaia "bash -c 'cd ~/code/meteo_station && cargo run -q -p meteo-tui --target {{ host_target }}'"
 
 # --- Code quality recipes ---
 
@@ -72,14 +52,14 @@ tui-gaia:
 format:
     cargo fmt -- --emit=files
 
-# meteo-firmware is no_std/thumbv7em; meteo-cli is host-only (btleplug/tokio).
+# meteo-firmware is no_std/thumbv7em; meteo-tui is host-only (ratatui/tokio).
 # Lint each on its own target — a single workspace clippy would try to build the
 # host crate (and its deps) for the embedded target and fail.
 [doc('Check code with clippy')]
 clippy:
     cargo clippy -p meteo-firmware -- -D warnings
-    cargo clippy -p meteo-lib -p meteo-cli -p meteo-tui --target {{ host_target }} -- -D warnings
+    cargo clippy -p meteo-lib -p meteo-tui --target {{ host_target }} -- -D warnings
 
 [doc('Run tests on host')]
 test:
-    cargo nextest run -p meteo-lib -p meteo-cli -p meteo-tui --target {{ host_target }}
+    cargo nextest run -p meteo-lib -p meteo-tui --target {{ host_target }}

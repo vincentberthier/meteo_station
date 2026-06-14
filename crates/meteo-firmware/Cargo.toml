@@ -5,15 +5,9 @@ authors.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[features]
-## Perform a factory reset of the RN4871 BLE module on boot.
-## Use this to recover from bad stored configuration.
-factory-reset = ["meteo-lib/factory-reset"]
-
 [dependencies]
 # Workspace library
 meteo-lib = { workspace = true, features = ["defmt"] }
-static_cell = "2.1.1"
 
 # Target-specific dependencies (embedded only)
 [target.'cfg(target_arch = "arm")'.dependencies]
@@ -22,9 +16,7 @@ cortex-m-rt = { workspace = true }
 defmt = { workspace = true }
 defmt-rtt = { workspace = true }
 embassy-executor = { workspace = true }
-embedded-io-async = { workspace = true }
 embassy-stm32 = { workspace = true }
-embassy-sync = { workspace = true }
 embassy-time = { workspace = true }
 panic-probe = { workspace = true }
 

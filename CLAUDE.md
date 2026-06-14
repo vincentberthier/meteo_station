@@ -6,7 +6,6 @@ Currently supports:
 
 - BMP388 barometric pressure/temperature sensor (via I2C1)
 - LED indicators (onboard and external)
-- RN4871 BLE module (via USART2, planned)
 
 ## Build Commands
 
@@ -52,41 +51,6 @@ wait $PROBE_PID
 ```
 
 This ensures probe-rs can cleanly detach from the debug probe before exiting.
-
-### BLE debugging on Gaia
-
-This dev machine has the ST-Link debug probe but **no Bluetooth adapter**. The
-`gaia` host has the adapter (`hci0`), `btmon`, and a checkout of this repo at
-`~/code/meteo_station`. The two machines do **not** share a filesystem, and Gaia's
-login shell is **fish** — wrap remote commands in `bash -c "..."` and never rely on
-`$?` (fish uses `$status`).
-
-Prerequisites (already satisfied, listed for recovery):
-
-- `Bash(ssh gaia:*)` is allow-listed; the broad `Bash(ssh:*)` deny must not shadow it.
-- Passwordless `doas` on Gaia (needed for `btmon` HCI capture).
-- Device and Gaia must be within BLE range of each other.
-
-Run a full capture with:
-
-```bash
-just ble-debug          # or: ./scripts/ble-debug.sh
-```
-
-`scripts/ble-debug.sh` flashes the firmware and captures three correlated streams
-into `./logs/` (git-ignored):
-
-- `rtt-<ts>.log` — firmware defmt output, captured locally via probe-rs.
-- `btmon-<ts>.log` — HCI trace from Gaia: plain `doas btmon` streams its decoded,
-  human-readable output over ssh stdout (nothing is written to Gaia's disk).
-  Note: `btmon -w -` does **not** mean stdout — it creates a file literally named
-  `-`; use plain `btmon` for the text stream.
-- `cli-<ts>.log` — the `meteo-cli` BLE central, run on Gaia (it has the adapter).
-
-The session ends when `meteo-cli` exits (the ~30s disconnect ends its notification
-stream); captures are then stopped cleanly — probe-rs always via **SIGINT**, never
-SIGTERM. To run only the central on Gaia: `just cli-gaia`. A zero-build fallback
-central is `bluetoothctl` on Gaia (scan → connect → `menu gatt` → `notify on`).
 
 ## Architecture
 

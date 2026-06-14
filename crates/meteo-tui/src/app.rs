@@ -1,7 +1,7 @@
 //! UI state and pure update logic for the TUI.
 use std::collections::VecDeque;
 
-use meteo_lib::ble::registry::SENSORS;
+use crate::sensors::SENSORS;
 
 /// Max readings retained per sensor (≈ 10 min at the ~1 Hz cadence).
 pub const HISTORY_CAPACITY: usize = 600;
@@ -15,12 +15,20 @@ pub enum ConnectionStatus {
     Connected,
 }
 
-/// Message from the BLE client task to the UI loop.
+/// Message from the data feed task to the UI loop.
+///
+/// Variants are the feed→UI protocol; a transport feed produces them (see
+/// `feed.rs`). The current stub feed wires no transport yet, so outside tests
+/// they are not constructed.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "feed→UI protocol; produced once a transport is wired into feed.rs"
+)]
 pub enum ClientEvent {
     /// Link established and subscribed.
     Connected,
-    /// Link lost; client is rescanning. History is kept.
+    /// Link lost; feed is reconnecting. History is kept.
     Disconnected,
     /// A new raw-wire reading for the sensor at registry `index`.
     Reading { index: usize, raw: f32 },
@@ -131,7 +139,7 @@ impl App {
     }
 
     /// Apply one client event. Unknown / out-of-range sensor indices are
-    /// ignored (mirrors the firmware's "unknown characteristic — ignore").
+    /// ignored.
     pub fn apply(&mut self, event: ClientEvent) {
         match event {
             ClientEvent::Connected => self.status = ConnectionStatus::Connected,
