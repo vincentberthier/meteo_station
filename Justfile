@@ -46,6 +46,18 @@ reset:
 cli:
     cargo run -p meteo-cli --target {{ host_target }}
 
+# --- BLE debug recipes ---
+
+# Full cross-machine BLE capture: RTT here + HCI trace & meteo-cli on Gaia.
+# See CLAUDE.md "BLE debugging on Gaia" for prerequisites.
+[doc('Run a full cross-machine BLE debug capture (probe here, BT adapter on Gaia)')]
+ble-debug:
+    ./scripts/ble-debug.sh
+
+[doc('Run the BLE client CLI on the Gaia host (the machine with the BT adapter)')]
+cli-gaia:
+    ssh gaia "bash -c 'cd ~/code/meteo_station && cargo run -q -p meteo-cli --target {{ host_target }}'"
+
 # --- Code quality recipes ---
 
 [doc('Format code')]
