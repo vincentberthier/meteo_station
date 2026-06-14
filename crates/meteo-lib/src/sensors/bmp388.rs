@@ -2,11 +2,22 @@ use embedded_hal_async::i2c::I2c;
 
 // BMP388 Register addresses
 const CHIP_ID_REG: u8 = 0x00;
+const STATUS: u8 = 0x03;
 const PWR_CTRL: u8 = 0x1B;
 const PRESS_MSB: u8 = 0x04;
 const TEMP_MSB: u8 = 0x07;
 const EXPECTED_CHIP_ID: u8 = 0x50;
 const CALIB_DATA: u8 = 0x31;
+
+// PWR_CTRL value: press_en (bit 0) | temp_en (bit 1) | forced mode (bits 5:4 = 01).
+// Forced mode takes exactly one measurement per trigger, then returns to sleep,
+// so the sampling rate is driven solely by how often we re-trigger (1 Hz here)
+// instead of the sensor free-running at its 200 Hz normal-mode ODR.
+const PWR_CTRL_FORCED: u8 = 0b0001_0011;
+
+// STATUS register data-ready flags: drdy_press (bit 5), drdy_temp (bit 6).
+const DRDY_PRESS: u8 = 1 << 5;
+const DRDY_TEMP: u8 = 1 << 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error<E> {
@@ -26,8 +37,10 @@ where
 {
     /// Creates a new BMP388 driver instance.
     ///
-    /// Verifies the chip ID and configures the sensor for normal mode with
-    /// both pressure and temperature measurements enabled.
+    /// Verifies the chip ID and reads the factory calibration data. The sensor
+    /// is left in its power-on sleep state; each [`read`](Self::read) triggers a
+    /// single forced-mode measurement, so the sampling rate is set entirely by
+    /// how often the caller reads (no free-running normal-mode sampling).
     ///
     /// # Errors
     ///
@@ -44,11 +57,6 @@ where
             return Err(Error::WrongChipId(chip_id[0]));
         }
 
-        // Enable pressure and temperature sensors in normal mode
-        i2c.write(address, &[PWR_CTRL, 0x33])
-            .await
-            .map_err(Error::I2c)?;
-
         // Read calibration data
         let mut calib_raw = [0_u8; 21];
         i2c.write_read(address, &[CALIB_DATA], &mut calib_raw)
@@ -64,12 +72,37 @@ where
         })
     }
 
-    /// Reads the current temperature and pressure from the sensor.
+    /// Triggers a single forced-mode measurement and returns the compensated
+    /// temperature and pressure.
+    ///
+    /// Writing `PWR_CTRL` starts one measurement; the sensor then returns to
+    /// sleep on its own. We wait for completion by polling the `STATUS`
+    /// data-ready flags (no fixed delay), so the wait ends the moment the
+    /// conversion is done regardless of the configured oversampling.
     ///
     /// # Errors
     ///
     /// Returns `Error::I2c` if communication with the sensor fails.
     pub async fn read(&mut self) -> Result<Reading, Error<E>> {
+        // Trigger one measurement.
+        self.i2c
+            .write(self.address, &[PWR_CTRL, PWR_CTRL_FORCED])
+            .await
+            .map_err(Error::I2c)?;
+
+        // Wait for the conversion to finish by polling the data-ready flags.
+        // Each I2C transaction awaits, yielding to the executor between polls.
+        loop {
+            let mut status = [0_u8; 1];
+            self.i2c
+                .write_read(self.address, &[STATUS], &mut status)
+                .await
+                .map_err(Error::I2c)?;
+            if status[0] & (DRDY_PRESS | DRDY_TEMP) == (DRDY_PRESS | DRDY_TEMP) {
+                break;
+            }
+        }
+
         let mut press_data = [0_u8; 3];
         self.i2c
             .write_read(self.address, &[PRESS_MSB], &mut press_data)
