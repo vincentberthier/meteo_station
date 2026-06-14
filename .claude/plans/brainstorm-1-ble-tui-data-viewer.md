@@ -902,12 +902,23 @@ Progress tracking (checked off during `/tyrex:code:implement-light`):
 - [x] 6. `main.rs` terminal lifecycle + event loop wiring — `ratatui::init/restore`, spawned client task, `select!` over readings + key input, event-driven redraw, q/Esc quit. Removed all three temporary `#![expect(dead_code)]`; `SensorState::len`/`is_empty` (test-only, clippy-paired) carry a targeted `#[cfg_attr(not(test), expect(dead_code))]`.
 - [x] All checks green (fmt, clippy host+firmware, nextest, firmware release build) — verified in substep 6's full gate.
 - [x] Manual verification on Gaia (live values, charts, quit) — verified 2026-06-14 on `gaia` (station reset via `just reset` on `hephaistos`, MAC `80:1F:12:B6:60:BF`). Driven through a sized PTY harness: status `● Connected`; Temperature `24.59 °C` (min/max + braille history curve, axis labels); Pressure `1009.57 hPa` with the Pa→hPa registry transform applied live; both panels registry-driven; terminal lifecycle enters/restores the alternate screen and quits cleanly on `q` (exit 0).
-- [ ] Reconnect across the firmware's ~30 s disconnect — NOT verified live (the harness window was shorter than the disconnect cycle); logic is `App::apply(Disconnected)` keeping history + `client::run` rescan loop, unit-tested.
+- [~] Reconnect — the deterministic ~30 s firmware disconnect is **fixed/gone** (see `sunny-hatching-diffie.md`), so there is no periodic drop to ride out. The TUI's scan→connect retry loop was exercised live: it reconnected after the controller aborted an initial attempt (where one-shot `meteo-cli` gave up). Induced mid-session disconnect (reset while connected) not separately captured; `App::apply(Disconnected)` history-retention is unit-tested.
 
-**Findings from live verification (follow-ups, not blockers):**
+**Findings from live verification — both fixed and verified live (2026-06-14):**
 
-- The left readout column is `Constraint::Length(24)` — too narrow for the full `min … max … avg …` line, so **`avg` is clipped** (for pressure even `max` is truncated). The value is computed and unit-tested; only the display is cut. Fix: widen the column (~36) or wrap stats onto a second line.
-- The TUI does **not** issue a clean BLE disconnect on quit: on `q`, `main` returns and the spawned client task is dropped mid-`notifications().next()` without calling `device.disconnect()`. This can leave a stale link on the central adapter (`le-connection-abort-by-local` on the next connect until BlueZ/the firmware ~30 s timeout clears it). Consider a shutdown signal that lets the session call `device.disconnect()` before exit.
+- ✅ **avg clipping** — readout column widened `24 → 42` (`fix(tui): widen sensor readout column …`). Live frame now shows `min 24.94  max 25.03  avg 24.99` (temp) and `min 1009.31  max 1009.45  avg 1009.37` (pressure) in full.
+- ✅ **No clean BLE disconnect on quit** — added a `tokio::sync::watch` shutdown flag; `client::session` now `select!`s on it and calls `device.disconnect()` before exit; `main` signals on quit and awaits the client task with a 2 s deadlock circuit-breaker (`fix(tui): cleanly disconnect BLE on quit …`).
+
+**Instability diagnosis ("takes forever / keeps disconnecting"):** the firmware link is
+stable once established (0 disconnects/session per `sunny-hatching-diffie.md`; live
+captures hold `Connected` with unbroken charts). The remaining pain is **connection
+_establishment_ flakiness in Gaia's controller** — `le-connection-abort-by-local` / HCI
+`0x3e` — documented there as a central-side RF/timing issue independent of the firmware.
+It is intermittent (`meteo-cli`, one-shot, reproduces the abort with no TUI involved).
+Mitigations applied/available: clean disconnect on quit (stops the TUI _creating_ stale
+links); the TUI's retry loop already masks transient aborts better than one-shot `cli`;
+a controller power-cycle (`bluetoothctl power off/on`) clears a stuck state. A deeper fix
+is controller/OS-side (BlueZ/adapter), not firmware or TUI.
 
 Follow-up (out of scope, enabled by this work): refactor `meteo-firmware`'s
 `ble.rs` and `gatt::collect_handles` to iterate `ble::registry::SENSORS` instead
