@@ -896,7 +896,7 @@ Progress tracking (checked off during `/tyrex:code:implement-light`):
 
 - [x] 1. Sensor registry in `meteo-lib` (`ble::registry`) + re-exports + 6 tests — `SensorDescriptor`/`SENSORS`/`index_for_uuid`/`pa_to_hpa`, re-exported from `ble::mod`; 6 tests pass.
 - [x] 2. Scaffold `meteo-tui` crate, workspace member, Justfile recipes/clippy/test — stub `main.rs` + placeholder modules; single crossterm 0.29 confirmed; builds + clippy clean.
-- [ ] 3. `app.rs` state & logic + 10 unit tests
+- [x] 3. `app.rs` state & logic + 10 unit tests — `App`/`SensorState`/`ClientEvent`/`ConnectionStatus`; 10 tests pass. Note: `ClientEvent` is `Copy`; module carries a temporary `#![expect(dead_code)]` to remove in substep 6 when types are consumed.
 - [ ] 4. `client.rs` auto-reconnecting btleplug central + 2 `decode_reading` tests
 - [ ] 5. `ui.rs` registry-driven rendering + 5 chart-axis helper tests
 - [ ] 6. `main.rs` terminal lifecycle + event loop wiring
