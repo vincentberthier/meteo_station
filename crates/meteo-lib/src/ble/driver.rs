@@ -927,10 +927,7 @@ mod tests {
             .await;
 
         // Then
-        assert!(
-            result.is_ok(),
-            "ServerWrite should succeed even with NFail"
-        );
+        assert!(result.is_ok(), "ServerWrite should succeed even with NFail");
         Ok(())
     }
 
@@ -968,7 +965,10 @@ mod tests {
             .await;
 
         // Then
-        assert!(result.is_ok(), "CMD> as framed line should be treated as success");
+        assert!(
+            result.is_ok(),
+            "CMD> as framed line should be treated as success"
+        );
         assert_eq!(lines.len(), 2, "should collect all data lines");
         assert_eq!(lines[0], b"BTA=AABB");
         assert_eq!(lines[1], b"Name=Test");
@@ -994,8 +994,15 @@ mod tests {
             .await;
 
         // Then
-        assert!(result.is_ok(), "END in LS output should not cause UnexpectedResponse");
-        assert_eq!(lines.len(), 3, "should collect service UUID + 2 characteristic lines");
+        assert!(
+            result.is_ok(),
+            "END in LS output should not cause UnexpectedResponse"
+        );
+        assert_eq!(
+            lines.len(),
+            3,
+            "should collect service UUID + 2 characteristic lines"
+        );
         Ok(())
     }
 }

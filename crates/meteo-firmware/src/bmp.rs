@@ -43,7 +43,10 @@ pub async fn read_barometer(
                     trunc2(reading.pressure_hpa())
                 );
                 // Publish to BLE task. Non-blocking: if channel is full, drop silently.
-                #[expect(clippy::let_underscore_must_use, reason = "intentional: next reading comes in 1s")]
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "intentional: next reading comes in 1s"
+                )]
                 let _ = channel.try_send(reading);
             }
             Err(e) => {

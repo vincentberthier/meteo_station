@@ -47,7 +47,10 @@ impl Uart for EmbassyUart {
 
 /// BLE task: configures the RN4871 with GATT services and streams sensor data.
 #[embassy_executor::task]
-#[allow(clippy::too_many_lines, reason = "hardware init sequence is inherently long")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "hardware init sequence is inherently long"
+)]
 pub async fn ble_task(
     uart: BufferedUart<'static>,
     mut rst_n: Output<'static>,
@@ -222,7 +225,10 @@ pub async fn ble_task(
 
     match (handles.temperature, handles.pressure) {
         (Some(t), Some(p)) => {
-            info!("BLE: handles discovered: temperature={=u16:04X}, pressure={=u16:04X}", t, p);
+            info!(
+                "BLE: handles discovered: temperature={=u16:04X}, pressure={=u16:04X}",
+                t, p
+            );
         }
         _ => {
             warn!(
@@ -258,19 +264,17 @@ pub async fn ble_task(
             Ok(Ok(n)) => {
                 line_buf.push_bytes(&rx_buf[..n]);
                 // Extract %...% status events
-                while line_buf.process_status_event(|event| {
-                    match parse_status_event(event) {
-                        StatusEvent::Connect { .. } => connected = true,
-                        StatusEvent::Disconnect => connected = false,
-                        StatusEvent::WriteConfig { handle, data } => {
-                            debug!(
-                                "BLE: CCCD write handle={=u16:04X} data={}",
-                                handle,
-                                str::from_utf8(data).unwrap_or("?")
-                            );
-                        }
-                        other => debug!("BLE: {:?}", other),
+                while line_buf.process_status_event(|event| match parse_status_event(event) {
+                    StatusEvent::Connect { .. } => connected = true,
+                    StatusEvent::Disconnect => connected = false,
+                    StatusEvent::WriteConfig { handle, data } => {
+                        debug!(
+                            "BLE: CCCD write handle={=u16:04X} data={}",
+                            handle,
+                            str::from_utf8(data).unwrap_or("?")
+                        );
                     }
+                    other => debug!("BLE: {:?}", other),
                 }) {}
                 // Drain remaining line-framed data
                 line_buf.for_each_line(|_| {});

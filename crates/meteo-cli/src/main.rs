@@ -2,7 +2,10 @@
 //!
 //! Scans for a BLE peripheral named `MeteoStation`, connects, discovers the
 //! custom GATT service, reads initial values, and subscribes to notifications.
-#![expect(clippy::print_stdout, reason = "CLI tool: stdout is the user interface")]
+#![expect(
+    clippy::print_stdout,
+    reason = "CLI tool: stdout is the user interface"
+)]
 
 use std::error::Error;
 use std::time::Duration;

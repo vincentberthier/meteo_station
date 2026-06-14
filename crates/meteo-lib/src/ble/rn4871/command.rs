@@ -527,7 +527,11 @@ mod tests {
         let rt = cmd.response_type();
 
         // Then
-        assert_eq!(rt, ResponseType::Aok, "ClearPrivateServices should expect AOK");
+        assert_eq!(
+            rt,
+            ResponseType::Aok,
+            "ClearPrivateServices should expect AOK"
+        );
         Ok(())
     }
 
@@ -630,7 +634,11 @@ mod tests {
         let rt = cmd.response_type();
 
         // Then
-        assert_eq!(rt, ResponseType::Aok, "DefineCharacteristic should expect AOK");
+        assert_eq!(
+            rt,
+            ResponseType::Aok,
+            "DefineCharacteristic should expect AOK"
+        );
         Ok(())
     }
 
