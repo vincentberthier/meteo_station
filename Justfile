@@ -16,9 +16,13 @@ default:
 
 # --- Build recipes ---
 
-[doc('Build firmware (release)')]
+# meteo-tui is host-only (ratatui/tokio/bluer); the default target is the
+# embedded one, so it needs an explicit host target or it would try to build for
+# thumbv7em and fail.
+[doc('Build firmware (release) and the TUI viewer')]
 build:
     cargo build --release -p meteo-firmware
+    cargo build --release -p meteo-tui --target {{ host_target }}
 
 [doc('Clean build artifacts')]
 clean:
