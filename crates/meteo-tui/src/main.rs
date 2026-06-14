@@ -10,6 +10,7 @@ use std::time::Duration;
 use futures::StreamExt as _;
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{Event, EventStream, KeyCode, KeyEventKind};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio::time::timeout;
@@ -39,6 +40,13 @@ async fn run(terminal: &mut DefaultTerminal) -> io::Result<()> {
     });
 
     let mut input = EventStream::new();
+    // External terminations (`kill`, systemd stop, SSH hang-up) must reach the
+    // same graceful shutdown path as `q`/`Esc`; otherwise the feed task never
+    // drops its discovery session and BlueZ keeps scanning until the D-Bus
+    // connection dies. In crossterm raw mode Ctrl-C is delivered as a key event,
+    // but SIGINT/SIGTERM raised by another process still need explicit handling.
+    let mut sigterm = signal(SignalKind::terminate())?;
+    let mut sigint = signal(SignalKind::interrupt())?;
     terminal.draw(|f| ui::render(f, &app))?; // initial frame
 
     loop {
@@ -56,6 +64,12 @@ async fn run(terminal: &mut DefaultTerminal) -> io::Result<()> {
                 {
                     app.should_quit = true;
                 }
+            }
+            _ = sigterm.recv() => {
+                app.should_quit = true;
+            }
+            _ = sigint.recv() => {
+                app.should_quit = true;
             }
         }
         if app.should_quit {

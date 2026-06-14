@@ -14,7 +14,7 @@ ratatui = "0.30"
 # `features = ["crossterm_0_29"]` to the ratatui dep above.
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures = "0.3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 meteo-lib = { workspace = true }
 bluer = { version = "0.17", features = ["bluetoothd"] }
 uuid = "1"
