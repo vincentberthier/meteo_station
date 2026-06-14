@@ -1,0 +1,14 @@
+# cargo-audit configuration.
+#
+# Both ignored advisories are *unmaintained* warnings (not security
+# vulnerabilities) on deep transitive dependencies we cannot upgrade directly:
+#
+#   - RUSTSEC-2026-0110 (bare-metal 0.2.5): pulled in by cortex-m 0.7.7, which
+#     still depends on the bare-metal 0.2 line. Resolves when cortex-m drops it.
+#   - RUSTSEC-2026-0173 (proc-macro-error2 2.0.1): pulled in by defmt-macros
+#     1.0.1. Resolves when defmt-macros updates its proc-macro-error2 dependency.
+#
+# Neither is reachable in a way we control; both clear once the upstream embedded
+# crates (cortex-m, defmt) publish updates. Revisit on the next dependency bump.
+[advisories]
+ignore = ["RUSTSEC-2026-0110", "RUSTSEC-2026-0173"]

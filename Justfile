@@ -67,3 +67,9 @@ clippy:
 [doc('Run tests on host')]
 test:
     cargo nextest run -p meteo-lib -p meteo-tui --target {{ host_target }}
+
+# Ignored advisories (unmaintained transitive deps) are documented in
+# .cargo/audit.toml; cargo-audit reads it automatically.
+[doc('Audit dependencies for security advisories')]
+audit:
+    cargo audit
