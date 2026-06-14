@@ -16,9 +16,15 @@ cortex-m-rt = { workspace = true }
 defmt = { workspace = true }
 defmt-rtt = { workspace = true }
 embassy-executor = { workspace = true }
+embassy-futures = { workspace = true }
 embassy-stm32 = { workspace = true }
+embassy-sync = { workspace = true }
 embassy-time = { workspace = true }
+embedded-hal = { workspace = true }
+embedded-hal-async = { workspace = true }
+embedded-io-async = { workspace = true }
 panic-probe = { workspace = true }
+static_cell = { workspace = true }
 
 [lints]
 workspace = true

@@ -2,6 +2,9 @@
 
 pub mod frame;
 pub mod rn4871;
+pub mod sample;
+
+pub use sample::{SensorSample, apply_sample};
 
 /// Schema version embedded in every wire frame.
 pub const SCHEMA_VERSION: u8 = 1;
