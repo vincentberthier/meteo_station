@@ -10,7 +10,11 @@ defmt = ["dep:defmt"]
 
 [dependencies]
 defmt = { workspace = true, optional = true }
+embedded-hal = { workspace = true }
 embedded-hal-async = { workspace = true }
+embedded-io-async = { workspace = true }
+heapless = { workspace = true }
+libm = { workspace = true }
 
 [dev-dependencies]
 test-log = { workspace = true }
