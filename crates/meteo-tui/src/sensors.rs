@@ -4,6 +4,8 @@
 //! precision, optional raw→display transform). A data feed maps its incoming
 //! readings onto registry indices; adding a sensor is one entry here.
 
+use meteo_lib::ble::frame::FrameField;
+
 /// Presentation metadata for one sensor.
 #[derive(Debug, Clone, Copy)]
 pub struct SensorDescriptor {
@@ -47,10 +49,34 @@ pub static SENSORS: &[SensorDescriptor] = &[
     },
 ];
 
+/// Map a decoded frame field to its registry index, or `None` if this build's
+/// registry does not present it. Keeps wire order and display order decoupled.
+#[must_use]
+pub const fn field_to_index(field: FrameField) -> Option<usize> {
+    match field {
+        FrameField::Temperature => Some(0_usize),
+        FrameField::Pressure => Some(1_usize),
+        // humidity, sky, lux, wind, battery: not in registry yet
+        FrameField::Humidity
+        | FrameField::SkyTemp
+        | FrameField::Luminosity
+        | FrameField::WindSpeed
+        | FrameField::WindDir
+        | FrameField::Battery => None,
+    }
+}
+
 // grcov exclude start
+#[expect(clippy::panic_in_result_fn, reason = "test module")]
 #[cfg(test)]
 mod tests {
+    use core::{error, result};
+
+    use meteo_lib::ble::frame::Frame;
+
     use super::*;
+
+    type TestResult = result::Result<(), Box<dyn error::Error>>;
 
     #[test]
     fn pa_to_hpa_converts() {
@@ -95,6 +121,60 @@ mod tests {
             displayed, raw,
             "temperature display_value should be identity"
         );
+    }
+
+    #[test]
+    fn field_to_index_maps_temperature_and_pressure() {
+        // Given / When / Then
+        assert_eq!(
+            field_to_index(FrameField::Temperature),
+            Some(0_usize),
+            "Temperature should map to registry index 0"
+        );
+        assert_eq!(
+            field_to_index(FrameField::Pressure),
+            Some(1_usize),
+            "Pressure should map to registry index 1"
+        );
+        assert_eq!(
+            field_to_index(FrameField::Humidity),
+            None,
+            "Humidity should map to None (not in registry yet)"
+        );
+    }
+
+    #[test]
+    fn decoded_pressure_feeds_registry_in_pascals() -> TestResult {
+        // Given
+        let frame = Frame {
+            pressure_pa: Some(101_325.0_f32),
+            ..Frame::default()
+        };
+
+        // When — exercise the wire path
+        let encoded = frame.encode();
+        let decoded = Frame::decode(&encoded)?;
+        let pair = decoded
+            .present_fields()
+            .find(|(f, _)| *f == FrameField::Pressure);
+
+        // Then
+        let (field, value) = pair.ok_or("pressure field missing from present_fields")?;
+        assert_eq!(
+            field_to_index(field),
+            Some(1_usize),
+            "Pressure field should map to registry index 1"
+        );
+        assert!(
+            (value - 101_325.0_f32).abs() < 10.0_f32,
+            "decoded pressure should be ~101325 Pa (±10), got {value}"
+        );
+        let displayed = SENSORS[1_usize].display_value(value);
+        assert!(
+            (displayed - 1013.25_f32).abs() < 0.1_f32,
+            "SENSORS[1].display_value should give ~1013.25 hPa, got {displayed}"
+        );
+        Ok(())
     }
 }
 // grcov exclude stop
