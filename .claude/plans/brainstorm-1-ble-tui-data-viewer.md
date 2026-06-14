@@ -899,9 +899,9 @@ Progress tracking (checked off during `/tyrex:code:implement-light`):
 - [x] 3. `app.rs` state & logic + 10 unit tests — `App`/`SensorState`/`ClientEvent`/`ConnectionStatus`; 10 tests pass. Note: `ClientEvent` is `Copy`; module carries a temporary `#![expect(dead_code)]` to remove in substep 6 when types are consumed.
 - [x] 4. `client.rs` auto-reconnecting btleplug central + 2 `decode_reading` tests — btleplug API matched sketch exactly; no stdout/stderr; 2 tests pass. Carries a temporary `#![expect(dead_code)]` to remove in substep 6.
 - [x] 5. `ui.rs` registry-driven rendering + 5 chart-axis helper tests — `render`/`render_status`/`render_sensor` + pure `y_bounds`/`x_axis_max`; ratatui 0.30 API confirmed; 5 tests pass. Carries a temporary `#![expect(dead_code)]` to remove in substep 6 (all three modules — app, client, ui — carry it).
-- [ ] 6. `main.rs` terminal lifecycle + event loop wiring
-- [ ] All checks green (fmt, clippy host+firmware, nextest, firmware release build)
-- [ ] Manual verification on Gaia (live values, charts, reconnect, quit)
+- [x] 6. `main.rs` terminal lifecycle + event loop wiring — `ratatui::init/restore`, spawned client task, `select!` over readings + key input, event-driven redraw, q/Esc quit. Removed all three temporary `#![expect(dead_code)]`; `SensorState::len`/`is_empty` (test-only, clippy-paired) carry a targeted `#[cfg_attr(not(test), expect(dead_code))]`.
+- [x] All checks green (fmt, clippy host+firmware, nextest, firmware release build) — verified in substep 6's full gate.
+- [ ] Manual verification on Gaia (live values, charts, reconnect, quit) — pending: this dev machine has no BT adapter; the board is on `hephaistos`. Run `just tui-gaia` with the device powered and in range of Gaia.
 
 Follow-up (out of scope, enabled by this work): refactor `meteo-firmware`'s
 `ble.rs` and `gatt::collect_handles` to iterate `ble::registry::SENSORS` instead

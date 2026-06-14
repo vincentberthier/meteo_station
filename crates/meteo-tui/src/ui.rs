@@ -1,6 +1,4 @@
 //! Registry-driven ratatui rendering.
-// Items here are defined for use in main.rs added in a later substep.
-#![expect(dead_code, reason = "consumed by main in substep 6")]
 use meteo_lib::ble::registry::{SENSORS, SensorDescriptor};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};

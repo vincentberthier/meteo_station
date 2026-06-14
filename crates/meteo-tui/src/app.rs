@@ -1,10 +1,4 @@
 //! UI state and pure update logic for the TUI.
-// Types here are defined for use in client.rs, ui.rs, and main.rs; they will
-// be consumed in subsequent substeps of the implementation plan.
-#![expect(
-    dead_code,
-    reason = "app types are used by client.rs, ui.rs, and main.rs added in later substeps"
-)]
 use std::collections::VecDeque;
 
 use meteo_lib::ble::registry::SENSORS;
@@ -53,11 +47,25 @@ impl SensorState {
     }
 
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "part of SensorState public API; called from tests"
+        )
+    )]
     pub fn len(&self) -> usize {
         self.values.len()
     }
 
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "part of SensorState public API; called from tests"
+        )
+    )]
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }

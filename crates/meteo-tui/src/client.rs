@@ -1,9 +1,4 @@
 //! Auto-reconnecting btleplug central feeding readings to the UI.
-// Functions here are called from main.rs, which is added in a later substep.
-#![expect(
-    dead_code,
-    reason = "client functions are called from main.rs added in a later substep"
-)]
 use std::error::Error;
 use std::time::Duration;
 
