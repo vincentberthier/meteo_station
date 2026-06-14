@@ -64,9 +64,13 @@ cli-gaia:
 format:
     cargo fmt -- --emit=files
 
+# meteo-firmware is no_std/thumbv7em; meteo-cli is host-only (btleplug/tokio).
+# Lint each on its own target — a single workspace clippy would try to build the
+# host crate (and its deps) for the embedded target and fail.
 [doc('Check code with clippy')]
 clippy:
-    cargo clippy -- -D warnings
+    cargo clippy -p meteo-firmware -- -D warnings
+    cargo clippy -p meteo-lib -p meteo-cli --target {{ host_target }} -- -D warnings
 
 [doc('Run tests on host')]
 test:
