@@ -148,6 +148,10 @@ mod tests {
         );
     }
 
+    #[expect(
+        clippy::float_cmp,
+        reason = "exact f64 bounds from integer inputs with no floating-point arithmetic"
+    )]
     #[test]
     fn y_bounds_single_point() {
         // Given
@@ -165,6 +169,10 @@ mod tests {
         );
     }
 
+    #[expect(
+        clippy::float_cmp,
+        reason = "exact f64 bounds from integer inputs with no floating-point arithmetic"
+    )]
     #[test]
     fn y_bounds_two_equal_values() {
         // Given
@@ -183,6 +191,10 @@ mod tests {
         );
     }
 
+    #[expect(
+        clippy::float_cmp,
+        reason = "exact f64 bounds from constant values with no floating-point arithmetic"
+    )]
     #[test]
     fn y_bounds_empty_is_unit_range() {
         // Given
@@ -199,6 +211,10 @@ mod tests {
         );
     }
 
+    #[expect(
+        clippy::float_cmp,
+        reason = "x_axis_max converts integer to f64 with no floating-point arithmetic"
+    )]
     #[test]
     fn x_axis_max_is_at_least_one() {
         // Given / When / Then

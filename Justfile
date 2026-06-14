@@ -62,7 +62,7 @@ format:
 [doc('Check code with clippy')]
 clippy:
     cargo clippy -p meteo-firmware -- -D warnings
-    cargo clippy -p meteo-lib -p meteo-tui --target {{ host_target }} -- -D warnings
+    cargo clippy -p meteo-lib -p meteo-tui --all-features --all-targets --target {{ host_target }} -- -D warnings
 
 [doc('Run tests on host')]
 test:

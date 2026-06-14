@@ -453,12 +453,14 @@ mod tests {
     extern crate std;
     use std::boxed::Box;
     use std::error;
+    use std::result;
+    use std::vec::Vec;
 
     use test_log::test;
 
     use super::*;
 
-    type TestResult = std::result::Result<(), Box<dyn error::Error>>;
+    type TestResult = result::Result<(), Box<dyn error::Error>>;
 
     // ── round-trip all fields ─────────────────────────────────────────────────
 
@@ -483,37 +485,37 @@ mod tests {
         // Then
         let temp_ok = decoded
             .temperature_c
-            .map_or(false, |t| (t - 23.45_f32).abs() < 0.02_f32);
+            .is_some_and(|t| (t - 23.45_f32).abs() < 0.02_f32);
         assert!(temp_ok, "temperature round-trip failed: {decoded:?}");
 
         let pressure_ok = decoded
             .pressure_pa
-            .map_or(false, |p| (p - 101_300.0_f32).abs() < 15.0_f32);
+            .is_some_and(|p| (p - 101_300.0_f32).abs() < 15.0_f32);
         assert!(pressure_ok, "pressure round-trip failed: {decoded:?}");
 
         let humidity_ok = decoded
             .humidity_pct
-            .map_or(false, |h| (h - 55.5_f32).abs() < 0.02_f32);
+            .is_some_and(|h| (h - 55.5_f32).abs() < 0.02_f32);
         assert!(humidity_ok, "humidity round-trip failed: {decoded:?}");
 
         let sky_ok = decoded
             .sky_temp_c
-            .map_or(false, |s| (s - (-10.25_f32)).abs() < 0.02_f32);
+            .is_some_and(|s| (s - (-10.25_f32)).abs() < 0.02_f32);
         assert!(sky_ok, "sky temperature round-trip failed: {decoded:?}");
 
         let lux_ok = decoded
             .luminosity_lux
-            .map_or(false, |l| (l - 1_000.0_f32).abs() < 1.0_f32);
+            .is_some_and(|l| (l - 1_000.0_f32).abs() < 1.0_f32);
         assert!(lux_ok, "luminosity round-trip failed: {decoded:?}");
 
         let wind_ok = decoded
             .wind_speed_ms
-            .map_or(false, |w| (w - 5.5_f32).abs() < 0.02_f32);
+            .is_some_and(|w| (w - 5.5_f32).abs() < 0.02_f32);
         assert!(wind_ok, "wind speed round-trip failed: {decoded:?}");
 
         let dir_ok = decoded
             .wind_dir_deg
-            .map_or(false, |d| (d - 270.0_f32).abs() < 0.2_f32);
+            .is_some_and(|d| (d - 270.0_f32).abs() < 0.2_f32);
         assert!(dir_ok, "wind direction round-trip failed: {decoded:?}");
 
         assert_eq!(
@@ -527,6 +529,10 @@ mod tests {
 
     // ── absent fields → sentinels and None ───────────────────────────────────
 
+    #[expect(
+        clippy::little_endian_bytes,
+        reason = "test fixtures verify little-endian sentinel bytes in the wire format"
+    )]
     #[test]
     fn absent_fields_encode_to_sentinels_and_decode_to_none() -> TestResult {
         // Given
@@ -593,7 +599,7 @@ mod tests {
     // ── frame length ──────────────────────────────────────────────────────────
 
     #[test]
-    fn encoded_frame_is_exactly_frame_len_bytes() -> TestResult {
+    fn encoded_frame_is_exactly_frame_len_bytes() {
         // Given
         let frame = Frame::default();
 
@@ -606,14 +612,12 @@ mod tests {
             FRAME_LEN,
             "encoded frame length must be FRAME_LEN"
         );
-
-        Ok(())
     }
 
     // ── error cases ───────────────────────────────────────────────────────────
 
     #[test]
-    fn decode_rejects_short_buffer() -> TestResult {
+    fn decode_rejects_short_buffer() {
         // Given
         let short = [0_u8; 10];
 
@@ -625,12 +629,10 @@ mod tests {
             matches!(result, Err(DecodeError::TooShort { got: 10 })),
             "expected TooShort{{got: 10}}, got {result:?}"
         );
-
-        Ok(())
     }
 
     #[test]
-    fn decode_rejects_unknown_version() -> TestResult {
+    fn decode_rejects_unknown_version() {
         // Given
         let mut buf = [0_u8; FRAME_LEN];
         buf[0_usize] = 0xFF_u8;
@@ -643,8 +645,6 @@ mod tests {
             matches!(result, Err(DecodeError::UnknownVersion(0xFF))),
             "expected UnknownVersion(0xFF), got {result:?}"
         );
-
-        Ok(())
     }
 
     // ── pressure in Pascals ───────────────────────────────────────────────────
@@ -662,6 +662,10 @@ mod tests {
         let decoded = Frame::decode(&encoded)?;
 
         // Then
+        #[expect(
+            clippy::expect_used,
+            reason = "test: .expect() surfaces failures directly"
+        )]
         let pa = decoded
             .pressure_pa
             .expect("pressure should be Some after round-trip");
@@ -675,8 +679,12 @@ mod tests {
 
     // ── saturation without hitting sentinel ───────────────────────────────────
 
+    #[expect(
+        clippy::little_endian_bytes,
+        reason = "test fixture verifies little-endian encoding of saturated i16 value"
+    )]
     #[test]
-    fn values_saturate_without_hitting_sentinel() -> TestResult {
+    fn values_saturate_without_hitting_sentinel() {
         // Given — extreme temperature (400 °C exceeds i16 centi-°C range)
         let frame = Frame {
             temperature_c: Some(400.0_f32),
@@ -698,8 +706,6 @@ mod tests {
             i16::MAX,
             "saturated temperature should equal i16::MAX"
         );
-
-        Ok(())
     }
 
     // ── luminosity mantissa/exponent roundtrip ────────────────────────────────
@@ -718,6 +724,10 @@ mod tests {
         let decoded = Frame::decode(&encoded)?;
 
         // Then — within 5% relative error
+        #[expect(
+            clippy::expect_used,
+            reason = "test: .expect() surfaces failures directly"
+        )]
         let got = decoded
             .luminosity_lux
             .expect("luminosity should be Some after round-trip");
@@ -733,7 +743,7 @@ mod tests {
     // ── present_fields ordering ───────────────────────────────────────────────
 
     #[test]
-    fn present_fields_yields_only_some_in_wire_order() -> TestResult {
+    fn present_fields_yields_only_some_in_wire_order() {
         // Given
         let frame = Frame {
             temperature_c: Some(20.0_f32),
@@ -742,7 +752,7 @@ mod tests {
         };
 
         // When
-        let fields: std::vec::Vec<(FrameField, f32)> = frame.present_fields().collect();
+        let fields: Vec<(FrameField, f32)> = frame.present_fields().collect();
 
         // Then
         assert_eq!(fields.len(), 2_usize, "expected exactly 2 present fields");
@@ -763,8 +773,6 @@ mod tests {
             "pressure field should be in Pa, got {}",
             fields[1_usize].1
         );
-
-        Ok(())
     }
 }
 // grcov exclude end

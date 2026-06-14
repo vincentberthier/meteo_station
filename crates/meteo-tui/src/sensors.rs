@@ -117,10 +117,12 @@ mod tests {
         let displayed = SENSORS[0].display_value(raw);
 
         // Then
-        assert_eq!(
-            displayed, raw,
-            "temperature display_value should be identity"
-        );
+        #[expect(
+            clippy::float_cmp,
+            reason = "exact value set then read with identity transform, no arithmetic"
+        )]
+        let ok = displayed == raw;
+        assert!(ok, "temperature display_value should be identity");
     }
 
     #[test]

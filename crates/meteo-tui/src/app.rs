@@ -182,6 +182,10 @@ mod tests {
         );
     }
 
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "test: loop index ≤ HISTORY_CAPACITY+4 = 604, exact in f32"
+    )]
     #[test]
     fn push_evicts_oldest_at_capacity() {
         // Given
@@ -218,6 +222,10 @@ mod tests {
         // Then
         assert_eq!(state.min(), Some(10.0), "min should be 10.0");
         assert_eq!(state.max(), Some(30.0), "max should be 30.0");
+        #[expect(
+            clippy::expect_used,
+            reason = "test: .expect() surfaces failures directly"
+        )]
         let avg = state.avg().expect("avg should be Some for non-empty state");
         assert!(
             (avg - 20.0).abs() < 1e-3,
@@ -253,6 +261,10 @@ mod tests {
         });
 
         // Then
+        #[expect(
+            clippy::expect_used,
+            reason = "test: .expect() surfaces failures directly"
+        )]
         let latest = app.sensors[1]
             .latest()
             .expect("pressure sensor should have a value after apply");
@@ -316,7 +328,7 @@ mod tests {
 
         // Then
         assert!(
-            app.sensors.iter().all(|s| s.is_empty()),
+            app.sensors.iter().all(SensorState::is_empty),
             "all sensor histories should remain empty when index is out of range"
         );
     }
@@ -346,7 +358,7 @@ mod tests {
         // Then
         assert_eq!(
             state.points(),
-            vec![(0.0, 10.0), (1.0, 20.0)],
+            vec![(0.0_f64, 10.0_f64), (1.0_f64, 20.0_f64)],
             "points should map index and value correctly"
         );
     }

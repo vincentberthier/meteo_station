@@ -41,22 +41,14 @@ pub const fn apply_sample(frame: &mut Frame, sample: SensorSample) {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 // grcov exclude start
-#[expect(clippy::panic_in_result_fn, reason = "test module")]
 #[cfg(test)]
 mod tests {
-    extern crate std;
-    use std::boxed::Box;
-    use std::error;
-    use std::result;
-
     use test_log::test;
 
     use super::*;
 
-    type TestResult = result::Result<(), Box<dyn error::Error>>;
-
     #[test]
-    fn apply_barometer_sets_temp_and_pressure() -> TestResult {
+    fn apply_barometer_sets_temp_and_pressure() {
         // Given
         let mut frame = Frame::default();
         let sample = SensorSample::Barometer {
@@ -68,6 +60,10 @@ mod tests {
         apply_sample(&mut frame, sample);
 
         // Then
+        #[expect(
+            clippy::expect_used,
+            reason = "test: .expect() surfaces failures directly"
+        )]
         let temp = frame
             .temperature_c
             .expect("temperature_c should be Some after apply_sample");
@@ -75,6 +71,10 @@ mod tests {
         let temp_ok = temp == 21.5_f32;
         assert!(temp_ok, "temperature_c should be 21.5, got {temp}");
 
+        #[expect(
+            clippy::expect_used,
+            reason = "test: .expect() surfaces failures directly"
+        )]
         let pressure = frame
             .pressure_pa
             .expect("pressure_pa should be Some after apply_sample");
@@ -106,12 +106,10 @@ mod tests {
             frame.battery_pct.is_none(),
             "battery_pct should remain None"
         );
-
-        Ok(())
     }
 
     #[test]
-    fn apply_barometer_overwrites_previous_sample() -> TestResult {
+    fn apply_barometer_overwrites_previous_sample() {
         // Given
         let mut frame = Frame::default();
         let first = SensorSample::Barometer {
@@ -128,6 +126,10 @@ mod tests {
         apply_sample(&mut frame, second);
 
         // Then
+        #[expect(
+            clippy::expect_used,
+            reason = "test: .expect() surfaces failures directly"
+        )]
         let temp = frame
             .temperature_c
             .expect("temperature_c should be Some after second apply_sample");
@@ -138,6 +140,10 @@ mod tests {
             "temperature_c should be 22.3 (second sample), got {temp}"
         );
 
+        #[expect(
+            clippy::expect_used,
+            reason = "test: .expect() surfaces failures directly"
+        )]
         let pressure = frame
             .pressure_pa
             .expect("pressure_pa should be Some after second apply_sample");
@@ -169,8 +175,6 @@ mod tests {
             frame.battery_pct.is_none(),
             "battery_pct should remain None"
         );
-
-        Ok(())
     }
 }
 // grcov exclude end

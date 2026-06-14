@@ -630,9 +630,11 @@ mod tests {
     extern crate std;
 
     use core::convert::Infallible;
+    use core::str;
     use std::boxed::Box;
     use std::collections::VecDeque;
     use std::error;
+    use std::result;
     use std::vec::Vec;
 
     use embedded_hal::digital::{ErrorType as PinErrorType, OutputPin};
@@ -642,7 +644,7 @@ mod tests {
 
     use super::*;
 
-    type TestResult = std::result::Result<(), Box<dyn error::Error>>;
+    type TestResult = result::Result<(), Box<dyn error::Error>>;
 
     // ── Fakes ─────────────────────────────────────────────────────────────────
 
@@ -835,7 +837,7 @@ mod tests {
     async fn discover_char_handle_parses_ls() -> TestResult {
         // Given — representative LS fixture followed by AOK for the push_frame call
         let ls_fixture = b"7E9A0001B5A34F6E9C112D4E6F8A0B1C\r\n  7E9A0002B5A34F6E9C112D4E6F8A0B1C,0072,10\r\nEND\r\n";
-        let mut rx = std::vec::Vec::new();
+        let mut rx = Vec::new();
         rx.extend_from_slice(ls_fixture);
         rx.extend_from_slice(b"AOK\r\n");
         let mut drv = make_driver(&rx);
@@ -858,7 +860,7 @@ mod tests {
         assert!(
             drv.uart.tx.windows(8_usize).any(|w| w == b"SHW,0072"),
             "tx should contain SHW,0072 but tx was: {:?}",
-            core::str::from_utf8(&drv.uart.tx)
+            str::from_utf8(&drv.uart.tx)
         );
 
         Ok(())
@@ -886,7 +888,7 @@ mod tests {
     async fn push_frame_emits_shw_with_hex() -> TestResult {
         // Given — set handle via discover_char_handle, then preload AOK for push_frame
         let ls_fixture = b"7E9A0001B5A34F6E9C112D4E6F8A0B1C\r\n  7E9A0002B5A34F6E9C112D4E6F8A0B1C,0072,10\r\nEND\r\n";
-        let mut rx = std::vec::Vec::new();
+        let mut rx = Vec::new();
         rx.extend_from_slice(ls_fixture);
         rx.extend_from_slice(b"AOK\r\n");
         let mut drv = make_driver(&rx);
@@ -898,7 +900,7 @@ mod tests {
 
         // Then
         assert!(result.is_ok(), "push_frame should return Ok: {result:?}");
-        let tx_str = core::str::from_utf8(&drv.uart.tx).unwrap_or("(invalid utf8)");
+        let tx_str = str::from_utf8(&drv.uart.tx).unwrap_or("(invalid utf8)");
         assert!(
             drv.uart
                 .tx
