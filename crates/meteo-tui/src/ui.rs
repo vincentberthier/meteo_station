@@ -49,7 +49,10 @@ fn render_sensor(
 ) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(24_u16), Constraint::Min(0_u16)])
+        // 42 cols holds the widest stats line ("min … max … avg …" for 4-digit
+        // hPa values: ~37 chars + borders) without clipping `avg`; the chart
+        // takes the rest.
+        .constraints([Constraint::Length(42_u16), Constraint::Min(0_u16)])
         .split(area);
     assert!(
         cols.len() > 1,
