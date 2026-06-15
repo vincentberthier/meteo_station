@@ -114,14 +114,53 @@ Pin reference: `datasheets/nucleo_pins.csv`.
 
 ### Pin Allocation
 
-| Function          | STM32 Pin | Connector         | Label      | Peripheral |
-| ----------------- | --------- | ----------------- | ---------- | ---------- |
-| LED green (LD1)   | PB0       | CN10 pin 31 (D33) | TIM_D_PWM1 | GPIO       |
-| LED yellow (LD2)  | PE1       | onboard           | -          | GPIO       |
-| LED red (LD3)     | PB14      | onboard           | -          | GPIO       |
-| External LED      | PG2       | CN8 pin 14 (D49)  | I/O        | GPIO       |
-| I2C1_SCL (BMP388) | PB8       | CN7 pin 2 (D15)   | I2C_A_SCL  | I2C1       |
-| I2C1_SDA (BMP388) | PB9       | CN7 pin 4 (D14)   | I2C_A_SDA  | I2C1       |
+| Function              | STM32 Pin | Connector         | Label      | Peripheral |
+| --------------------- | --------- | ----------------- | ---------- | ---------- |
+| LED green (LD1)       | PB0       | CN10 pin 31 (D33) | TIM_D_PWM1 | GPIO       |
+| LED yellow (LD2)      | PE1       | onboard           | -          | GPIO       |
+| LED red (LD3)         | PB14      | onboard           | -          | GPIO       |
+| External LED          | PG2       | CN8 pin 14 (D49)  | I/O        | GPIO       |
+| I2C1_SCL (BMP388)     | PB8       | CN7 pin 2 (D15)   | I2C_A_SCL  | I2C1       |
+| I2C1_SDA (BMP388)     | PB9       | CN7 pin 4 (D14)   | I2C_A_SDA  | I2C1       |
+| USART2_RX (RN4871 TX) | PD6       | CN9 pin 4 (D52)   | USART_B_RX | USART2     |
+| USART2_TX (RN4871 RX) | PD5       | CN9 pin 6 (D53)   | USART_B_TX | USART2     |
+| RN4871 RST_N          | PA4       | CN7 pin 17 (D24)  | SPI_B_NSS  | GPIO       |
+
+(`USART2_RX` connects to the module's TX and vice-versa. PA4's connector
+silkscreen label is `SPI_B_NSS`; it is driven as a plain active-low GPIO here.)
+
+### BLE soak test
+
+The RN4871 BLE link is brought up by `ble::ble_task` (firmware) as device
+`80:1F:12:B6:60:BF`, module firmware v1.30, advertising continuously with no
+GATT services. The link is **unproven** — prior attempts never held a connection
+for the 6-minute target, and the root cause was never found. The live soak is the
+**acceptance gate**, not the host unit tests (which only prove the parser).
+
+Acceptance harness: `scripts/ble_soak.sh`, run **on gaia** (BlueZ 5.86). Deploy
+and run:
+
+```bash
+scp scripts/ble_soak.sh gaia:
+ssh gaia ./ble_soak.sh        # Ctrl-C to stop
+```
+
+It drives connect → hold 6 min → disconnect → 90 s gap → reconnect, indefinitely,
+printing one `PASS (held 360s)` line per cycle and exiting non-zero on any
+mid-window drop or failed reconnect. A single passing cycle is **not** acceptance —
+the link must hold and repeat over a sustained run.
+
+Two methodology traps to avoid (learned the hard way):
+
+- **Never** run a blocking scan (`timeout … btmgmt find`, `bluetoothctl scan on`)
+  to find the device — it wedges the adapter in `Discovering: yes`. The script
+  connects by address off blueman's standing discovery cache instead.
+- Query link state via `busctl` (`org.bluez.Device1.Connected`) or the BlueZ
+  cache, **never** a second scan.
+
+If the soak drops, diagnose with `btmon` on gaia during a hold (who drops the link
+and why) before changing code; the first tuning knobs are the conn-interval /
+supervision-timeout values, not another patch.
 
 ## Debugging & Accountability Principles
 

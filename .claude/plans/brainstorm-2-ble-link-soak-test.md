@@ -2,7 +2,7 @@
 
 - **Source:** '2 (`.claude/brainstorm/2-ble-link-soak-test.md`)
 - **Date:** 2026-06-15
-- **Status:** Planned
+- **Status:** Done
 
 ## Summary
 
@@ -673,7 +673,7 @@ Progress tracking (checked during `/tyrex:code:implement-light`):
 - [x] 4. Firmware hardware wiring (main.rs) — `mod ble;`, USART2 IRQ bind (`BufferedInterruptHandler`), `BufferedUart` PD6/PD5 + 256B StaticCell buffers, RST_N PA4, spawn `ble_task`. `cargo build -p meteo-firmware` + firmware clippy green (`BufferedUart::new` sig + alias verified vs embassy-stm32 0.5 source).
 - [x] 5. gaia soak script — `scripts/ble_soak.sh`: `set -euo pipefail`, busctl D-Bus link poll, no-scan connect-by-address, bounded poll-with-check loops, conn-param debugfs apply. shellcheck-clean, parses, executable.
 - [x] 6. Build/lint/format/test gate — `cargo fmt --check` clean; `just clippy` (firmware ARM + lib host, -D warnings) clean; `just test` 29 pass; `cargo build -p meteo-firmware` ok; `shellcheck` clean.
-- [ ] 7. Documentation
+- [x] 7. Documentation — CLAUDE.md: 3 RN4871 pin rows (PD6/PD5/PA4, verified vs nucleo_pins.csv; PA4 label corrected to `SPI_B_NSS`) + "BLE soak test" subsection (traps, btmon-first diagnosis). README.md created: build recipes + full `scripts/ble_soak.sh` env-knob table + gaia/doas deployment.
 
 Reference only (do not copy): revision `snlwmrollztk` —
 `crates/meteo-lib/src/ble/rn4871.rs`, `crates/meteo-firmware/src/ble.rs`.
