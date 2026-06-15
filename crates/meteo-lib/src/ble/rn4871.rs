@@ -75,9 +75,13 @@ enum Line {
 /// newline-terminated, and the prompt (`CMD> `) carries no newline either; the
 /// reader ([`Rn4871::read_line`]) hands both here as complete tokens.
 fn classify(line: &[u8]) -> Line {
-    if line == b"AOK" {
+    // Status replies are matched case-insensitively: the RN4871 (V1.30) answers
+    // errors as lowercase `Err`, not `ERR`. Treating `Err` as data made
+    // `command()` loop forever waiting for an AOK/ERR that never came — exactly
+    // how a rejected `SHW` wedged the BLE task.
+    if line.eq_ignore_ascii_case(b"AOK") {
         Line::Aok
-    } else if line == b"ERR" {
+    } else if line.eq_ignore_ascii_case(b"ERR") {
         Line::Err
     } else if line.len() >= 2_usize && line.first() == Some(&b'%') && line.last() == Some(&b'%') {
         let inner = &line[1_usize..line.len().saturating_sub(1_usize)];
@@ -430,22 +434,84 @@ where
         Ok((major, minor))
     }
 
-    /// Provision the module with the `MeteoStation` service and characteristic.
+    /// Issue `R,1` (immediate reboot) and wait for the `%REBOOT%` event.
     ///
-    /// Issues the provisioning command sequence in order, triggers a reboot,
-    /// re-enters command mode, and discovers the characteristic handle.
-    ///
-    /// Note: this implementation always writes the full provisioning sequence
-    /// (no verify-and-skip optimisation).
+    /// `R,1` replies with the `%REBOOT%` *event*, not `AOK`, so it cannot go
+    /// through [`command`](Self::command) (which would block forever waiting for
+    /// an `AOK` that never arrives). It is written raw and the reboot event
+    /// awaited here.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Io`] on UART failure, [`Error::Command`] if any
-    /// command is rejected, or [`Error::NoHandle`] if the characteristic
-    /// handle cannot be discovered after provisioning.
+    /// Returns [`Error::Io`] on UART failure.
+    async fn reboot(&mut self) -> Result<(), Error<E>> {
+        self.write_all(b"R,1\r").await?;
+        let mut line = HVec::<u8, 64>::new();
+        loop {
+            self.read_line(&mut line).await?;
+            if classify(&line) == Line::Event(Event::Reboot) {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Full factory reset (`SF,2`): clear all NVM config to factory defaults.
+    ///
+    /// Like `R,1`, `SF,2` reboots immediately and answers with the `%REBOOT%`
+    /// event (not `AOK`), so it is written raw and the event awaited. Used as the
+    /// first provisioning step to guarantee a known-clean starting state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Io`] on UART failure.
+    async fn factory_reset(&mut self) -> Result<(), Error<E>> {
+        self.write_all(b"SF,2\r").await?;
+        let mut line = HVec::<u8, 64>::new();
+        loop {
+            self.read_line(&mut line).await?;
+            if classify(&line) == Line::Event(Event::Reboot) {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Provision the module with the `MeteoStation` service and characteristic.
+    ///
+    /// Sets the name, restricts the default services, clears any prior custom
+    /// GATT table (`PZ`), defines the service + one notify characteristic,
+    /// switches to No-Prompt mode (`SR,4000`), persists (`WR`), and reboots to
+    /// activate. Leaves the module in command mode; the caller discovers the
+    /// handle.
+    ///
+    /// Each command is sent via [`command`](Self::command), which discards any
+    /// lines preceding the `AOK`/`Err` — including the version banner the module
+    /// emits after a reboot — so the command stream re-synchronises on every
+    /// step. Always writes the full sequence (no verify-and-skip optimisation).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Io`] on UART failure or [`Error::Command`] if any
+    /// command is rejected.
     pub async fn provision(&mut self) -> Result<(), Error<E>> {
+        // Start from a known-clean state: a full factory reset clears any prior
+        // NVM config (stale services, prompt/no-prompt, locked settings) that
+        // would otherwise make set-commands behave unpredictably.
+        self.factory_reset().await?;
+        self.enter_command_mode().await?;
+
         self.command(b"SN,MeteoStation").await?;
         self.command(b"SS,80").await?;
+        // Max RF output power for advertising and connection. Per the RN4870/71
+        // user guide §2.4.16, `SGA,0`/`SGC,0` is the HIGHEST power (0 dBm); 5 is
+        // lowest. The factory reset can leave power below max, giving a very weak
+        // link (RSSI ~-99 even at <2 m) that drops the connection ~1×/s.
+        self.command(b"SGA,0").await?;
+        self.command(b"SGC,0").await?;
+        // Request a long connection supervision timeout so the link survives a
+        // lossy central (e.g. a deaf BLE adapter that drops many packets) instead
+        // of dropping ~1×/s. ST,<min>,<max>,<latency>,<timeout>: interval ×1.25 ms,
+        // timeout ×10 ms. 20–40 ms interval, 0 latency, 6 s supervision timeout.
+        self.command(b"ST,0010,0020,0000,0258").await?;
         self.command(b"PZ").await?;
 
         // Format SERVICE_UUID as 32 uppercase hex chars
@@ -470,36 +536,24 @@ where
         let _ext_ok5 = add_char_cmd.extend_from_slice(b",10,14");
         self.command(&add_char_cmd).await?;
 
+        // No-Prompt mode (suppress `CMD> `) for clean MCU parsing post-reboot.
         self.command(b"SR,4000").await?;
-        self.command(b"WR").await?;
-
-        // Trigger reboot. `R,1` reboots immediately and replies `%REBOOT%` (an
-        // event), NOT `AOK` — so it must not go through `command()`, which would
-        // block forever waiting for an AOK that never arrives. Send it raw and
-        // wait for the reboot event below.
-        self.write_all(b"R,1\r").await?;
-
-        // Wait for reboot event
-        let mut line = HVec::<u8, 64>::new();
-        loop {
-            self.read_line(&mut line).await?;
-            if classify(&line) == Line::Event(Event::Reboot) {
-                break;
-            }
-        }
-
-        // Re-enter command mode
+        // No `WR`: RN4871 V1.30 rejects it (`Err`) and set-commands + service
+        // definitions persist to NVM on their own; the reboot activates them.
+        self.reboot().await?;
         self.enter_command_mode().await?;
-
-        // Discover characteristic handle
-        self.discover_char_handle().await?;
 
         Ok(())
     }
 
     /// Issue `LS` and parse the output to find the value handle for `CHAR_UUID`.
     ///
-    /// Stores the handle in `self.char_handle` and also returns it.
+    /// The RN4871 lists the notify characteristic under its UUID with the value
+    /// handle first — the handle `SHW` writes to, which fans the write out to a
+    /// subscribed central. A following same-UUID line carries the CCCD handle,
+    /// which `SHW` rejects. This takes the first match (the value handle) and
+    /// stores it in `self.char_handle`. Non-matching lines — including the
+    /// version banner the module emits after a reboot — are skipped.
     ///
     /// # Errors
     ///
@@ -535,26 +589,28 @@ where
                 Line::Data => {}
             }
 
-            // Trim leading whitespace
+            // Trim leading indentation, then split the characteristic line into
+            // its comma-separated fields. The RN4871 lists each entry as
+            //   <UUID>,<handle>,<property>[,...]
+            // For our notify characteristic the value handle line (the handle
+            // `SHW` writes) is listed first under the UUID, with the CCCD handle
+            // on a following same-UUID line. We take the first match: the value
+            // handle.
             let trimmed = trim_leading(line.as_slice());
+            let mut fields = trimmed.split(|&b| b == b',');
 
-            // Find first comma
-            let Some(comma1) = trimmed.iter().position(|&b| b == b',') else {
+            let Some(uuid_field) = fields.next() else {
                 continue;
             };
-
-            let uuid_field = &trimmed[..comma1];
-
             // Compare case-insensitively with our CHAR_UUID
             if !uuid_field.eq_ignore_ascii_case(&char_uuid_buf) {
                 continue;
             }
 
-            // Get second field (handle)
-            let after_comma1 = trimmed.get(comma1.saturating_add(1_usize)..).unwrap_or(&[]);
-            let comma2 = after_comma1.iter().position(|&b| b == b',');
-            let handle_bytes =
-                comma2.map_or(after_comma1, |pos| after_comma1.get(..pos).unwrap_or(&[]));
+            let Some(handle_bytes) = fields.next() else {
+                // UUID matched but the line is missing the handle field.
+                continue;
+            };
 
             let handle_str =
                 str::from_utf8(handle_bytes).map_err(|_utf8_err| Error::BadResponse)?;
@@ -573,7 +629,28 @@ where
     /// Returns [`Error::Io`] on UART failure, or [`Error::Command`] if the
     /// module rejects the command.
     pub async fn start_advertising(&mut self) -> Result<(), Error<E>> {
-        self.command(b"A").await
+        // `A,<interval>` with a SINGLE parameter (no total-time) advertises
+        // FOREVER at that interval. The bare `A` only fast-advertises for 30 s
+        // then drops off, leaving the device dark while idle — which fails the
+        // hard requirement that it advertise full-time whenever nothing is
+        // connected. 0x00A0 = 160 ms interval.
+        self.command(b"A,00A0").await
+    }
+
+    /// Re-start advertising fire-and-forget: write `A` without awaiting `AOK`.
+    ///
+    /// Used from the event loop after a disconnect. Awaiting the `A`
+    /// acknowledgement there can block forever if a central reconnects before
+    /// the `AOK` arrives (the module won't re-acknowledge once connecting). The
+    /// stray `AOK` is harmlessly skipped by [`next_event`](Self::next_event).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Io`] on UART failure.
+    pub async fn restart_advertising(&mut self) -> Result<(), Error<E>> {
+        // Same single-parameter form as `start_advertising` so the device
+        // resumes FULL-TIME advertising (no 30 s cutoff) after a disconnect.
+        self.write_all(b"A,00A0\r").await
     }
 
     /// Encode `frame` bytes as hex and write them to the characteristic via `SHW`.
@@ -624,9 +701,10 @@ where
             self.read_line(&mut line).await?;
             match classify(&line) {
                 Line::Event(e) => return Ok(e),
-                // A bare prompt is noise between events; keep waiting.
-                Line::Prompt => {}
-                Line::Aok | Line::Err | Line::Data => return Err(Error::BadResponse),
+                // Skip everything that isn't an event: prompts, stray command
+                // acknowledgements (e.g. from a fire-and-forget re-advertise),
+                // echoes, and blank/data lines. Keep waiting for a real event.
+                Line::Prompt | Line::Aok | Line::Err | Line::Data => {}
             }
         }
     }
@@ -791,6 +869,23 @@ mod tests {
     }
 
     #[test(tokio::test)]
+    async fn command_returns_err_on_lowercase_err() -> TestResult {
+        // Given — the RN4871 V1.30 answers a rejected command with lowercase `Err`.
+        let mut drv = make_driver(b"Err\r\n");
+
+        // When
+        let result = drv.command(b"SHW,0073,01AB").await;
+
+        // Then — must classify as an error, not hang waiting for AOK/ERR.
+        assert!(
+            matches!(result, Err(Error::Command)),
+            "expected Err(Command) from lowercase `Err` but got {result:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
     async fn command_returns_err_after_event() -> TestResult {
         // Given — event arrives before ERR
         let mut drv = make_driver(b"%CONNECT,0,001122334455%\r\nERR\r\n");
@@ -847,6 +942,24 @@ mod tests {
         assert!(
             matches!(event, Ok(Event::Disconnect)),
             "expected Disconnect event but got {event:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn next_event_skips_stray_ack_before_event() -> TestResult {
+        // Given — a fire-and-forget re-advertise leaves a stray `AOK` in the
+        // stream before the next real event. next_event must skip it, not error.
+        let mut drv = make_driver(b"AOK\r\n%CONNECT,0,001122334455%\r\n");
+
+        // When
+        let event = drv.next_event().await;
+
+        // Then — the AOK is skipped and the Connect event is returned.
+        assert!(
+            matches!(event, Ok(Event::Connect)),
+            "expected Connect past the stray AOK but got {event:?}"
         );
 
         Ok(())
@@ -965,6 +1078,62 @@ mod tests {
             drv.uart.tx.windows(8_usize).any(|w| w == b"SHW,0072"),
             "tx should contain SHW,0072 but tx was: {:?}",
             str::from_utf8(&drv.uart.tx)
+        );
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn discover_char_handle_picks_value_handle_first() -> TestResult {
+        // Given — the real V1.30 hardware lists the notify characteristic under
+        // its UUID across TWO lines: the value handle (0072) first, then the
+        // CCCD handle (0073). `SHW` accepts the value handle and rejects the
+        // CCCD handle, so discover must take the first match.
+        let ls_fixture = b"7E9A0001B5A34F6E9C112D4E6F8A0B1C\r\n  7E9A0002B5A34F6E9C112D4E6F8A0B1C,0072,00\r\n  7E9A0002B5A34F6E9C112D4E6F8A0B1C,0073,10,0\r\nEND\r\n";
+        let mut rx = Vec::new();
+        rx.extend_from_slice(ls_fixture);
+        rx.extend_from_slice(b"AOK\r\n");
+        let mut drv = make_driver(&rx);
+
+        // When
+        let handle = drv.discover_char_handle().await;
+
+        // Then — the value handle (first), never the CCCD handle.
+        assert!(
+            matches!(handle, Ok(0x0072_u16)),
+            "expected value handle 0x0072 (not the CCCD 0x0073) but got {handle:?}"
+        );
+
+        // And SHW targets the value handle.
+        let push = drv.push_frame(&[0x01_u8, 0xAB_u8]).await;
+        assert!(push.is_ok(), "push_frame should succeed: {push:?}");
+        assert!(
+            drv.uart.tx.windows(8_usize).any(|w| w == b"SHW,0072"),
+            "tx should contain SHW,0072 but tx was: {:?}",
+            str::from_utf8(&drv.uart.tx)
+        );
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn discover_char_handle_skips_reboot_banner() -> TestResult {
+        // Given — after a reboot the module emits a version banner that lands in
+        // the LS read; it has no UUID/handle fields and must be skipped, not
+        // misparsed as the characteristic.
+        let ls_fixture = b"RN4871 V1.30 3/18/2018 (c)Microchip Technology Inc\r\n7E9A0001B5A34F6E9C112D4E6F8A0B1C\r\n  7E9A0002B5A34F6E9C112D4E6F8A0B1C,0072,00\r\nEND\r\n";
+        let mut rx = Vec::new();
+        rx.extend_from_slice(ls_fixture);
+        rx.extend_from_slice(b"AOK\r\n");
+        let mut drv = make_driver(&rx);
+
+        // When
+        let handle = drv.discover_char_handle().await;
+
+        // Then — banner skipped, value handle found.
+        assert!(
+            matches!(handle, Ok(0x0072_u16)),
+            "expected value handle 0x0072 past the banner but got {handle:?}"
         );
 
         Ok(())

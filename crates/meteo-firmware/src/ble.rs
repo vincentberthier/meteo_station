@@ -124,25 +124,42 @@ pub async fn ble_task(uart: BufferedUart<'static>, reset: Output<'static>) {
     bring_up(&mut dev).await;
 
     let mut frame = Frame::default();
+    // Track link state so we only write the characteristic while a central is
+    // actually connected. `SHW` against a notify characteristic with no
+    // subscriber is wasted work and, on the RN4871, answers `Err` — which would
+    // trip the recovery path and reset a perfectly healthy module once a second.
+    let mut connected = false;
     loop {
         match select(SENSOR_CHANNEL.receive(), dev.next_event()).await {
             Either::First(sample) => {
+                // Always fold the newest reading into the frame so the value is
+                // current the instant a central connects; only push it on the wire
+                // while connected.
                 apply_sample(&mut frame, sample);
-                if dev.push_frame(&frame.encode()).await.is_err() {
+                if connected && dev.push_frame(&frame.encode()).await.is_err() {
                     recover(&mut dev).await;
+                    connected = false;
                 }
+            }
+            Either::Second(Ok(Event::Connect)) => {
+                info!("BLE: central connected");
+                connected = true;
             }
             Either::Second(Ok(Event::Disconnect)) => {
                 info!("BLE: disconnected, restarting advertising");
-                dev.start_advertising().await.ok();
+                connected = false;
+                // Fire-and-forget: awaiting the `A` AOK here can wedge the loop
+                // if a central reconnects before it arrives.
+                dev.restart_advertising().await.ok();
             }
             Either::Second(Ok(_)) => {
-                // Connect / Reboot / StreamOpen / Other — log only.
+                // Reboot / StreamOpen / Other — log only.
                 info!("BLE: event received");
             }
             Either::Second(Err(_)) => {
                 error!("BLE: UART error on next_event, recovering");
                 recover(&mut dev).await;
+                connected = false;
             }
         }
     }
