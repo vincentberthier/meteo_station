@@ -715,6 +715,28 @@ confirm whether RSSI better than ~−80 lets the link establish), then probe the
 RN4871's post-`%CONNECT%` behaviour. 0x3e at establishment is unlikely to be
 fixed by the supervision/interval knobs.
 
+### Update — root causes found (later same day)
+
+1. **`SS,00` was wrong: the module needs services to be connectable.** With
+   `SS,00` (no GATT) the RN4871 advertised but never accepted a connection —
+   firmware never saw `%CONNECT`, central got 0x3e. Changed provision to
+   **`SS,C0`** (Device Info + Transparent UART, as the datasheet's own example
+   uses). After this the module connects, GATT discovery runs, and `ATT Handle
+Value Notification` data flows. **The plan's "no GATT / no services" premise
+   was the bug.**
+2. **Remaining blocker is RF, not code: RSSI ≈ −90 to −101 dBm.** TX power is
+   already maxed (`SGA,0`/`SGC,0`). At that level (BLE sensitivity floor) the
+   link connects then drops within ~1–3 s, looping. This is an antenna/proximity
+   problem — confirm by moving the device next to the adapter and re-reading
+   RSSI; a healthy nearby link is −40 to −70 dBm. No conn-param/firmware change
+   rescues a sub-sensitivity link.
+3. Minor harness bug fixed: `apply_conn_params` wrote `conn_min` before
+   `conn_max`, failing the kernel's `min<=max` check when widening. Now writes
+   floor→max→min.
+
+**Status: bring-up + connectability work and are proven on hardware; the link
+still does not hold, and the cause is now identified as weak RF (~−100 dBm).**
+
 Quality aside: `cargo deny check` fails on **pre-existing** transitive issues
 (RUSTSEC-2026-0110 bare-metal, RUSTSEC-2026-0173 proc-macro-error2 — both
 "unmaintained"; plus license-allowlist gaps in `deny.toml`). Unrelated to this
