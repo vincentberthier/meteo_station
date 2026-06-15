@@ -10,7 +10,7 @@ use embassy_futures::select::{Either, select};
 use embassy_stm32::gpio::Output;
 use embassy_stm32::usart::BufferedUart;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
-use embassy_sync::channel::Channel;
+use embassy_sync::channel::{Channel, TrySendError};
 use embassy_time::Delay;
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::delay::DelayNs;
@@ -21,6 +21,28 @@ use meteo_lib::ble::{SensorSample, apply_sample};
 
 /// Channel for sensor samples from the measurement tasks to the BLE task.
 pub static SENSOR_CHANNEL: Channel<ThreadModeRawMutex, SensorSample, 8> = Channel::new();
+
+/// Publish a sample to [`SENSOR_CHANNEL`] without ever blocking the caller.
+///
+/// Telemetry is latest-wins: if the BLE consumer is slow or wedged and the
+/// channel is full, the oldest unconsumed sample is dropped to make room for
+/// the new one. A blocking `send().await` would instead back-pressure the
+/// measurement task and freeze acquisition whenever the BLE link stalls — which
+/// is never what we want for a periodic sensor feed.
+pub fn publish_sample(sample: SensorSample) {
+    let mut pending = sample;
+    loop {
+        match SENSOR_CHANNEL.try_send(pending) {
+            Ok(()) => return,
+            Err(TrySendError::Full(returned)) => {
+                // Channel full ⇒ non-empty, so this receive always frees a slot;
+                // the retry then succeeds. Drops the oldest, keeps the newest.
+                let _dropped = SENSOR_CHANNEL.try_receive();
+                pending = returned;
+            }
+        }
+    }
+}
 
 /// Attempt a full bring-up sequence once (no retry).
 ///

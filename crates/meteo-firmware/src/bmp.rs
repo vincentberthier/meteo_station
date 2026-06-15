@@ -11,7 +11,7 @@ use meteo_lib::ble::SensorSample;
 use meteo_lib::bmp388::Bmp388;
 use meteo_lib::trunc2;
 
-use crate::ble::SENSOR_CHANNEL;
+use crate::ble::publish_sample;
 
 const BMP388_ADDR: u8 = 0x77;
 
@@ -40,14 +40,13 @@ pub async fn read_barometer(i2c: I2c<'static, Async, Master>) {
                     trunc2(reading.pressure),
                     trunc2(reading.pressure_hpa())
                 );
-                // Publish to the BLE task. At 1 Hz with a same-rate consumer this
-                // never blocks; it only awaits if the channel is momentarily full.
-                SENSOR_CHANNEL
-                    .send(SensorSample::Barometer {
-                        temperature_c: reading.temperature,
-                        pressure_pa: reading.pressure,
-                    })
-                    .await;
+                // Publish to the BLE task. Non-blocking and latest-wins: if the
+                // BLE link stalls and the channel fills, the oldest sample is
+                // dropped rather than back-pressuring (and freezing) this task.
+                publish_sample(SensorSample::Barometer {
+                    temperature_c: reading.temperature,
+                    pressure_pa: reading.pressure,
+                });
             }
             Err(e) => {
                 warn!("Failed to read sensor: {:?}", Debug2Format(&e));
