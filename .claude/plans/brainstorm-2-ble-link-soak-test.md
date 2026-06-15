@@ -669,10 +669,10 @@ Progress tracking (checked during `/tyrex:code:implement-light`):
 
 - [x] 1. Workspace + crate dependencies — added `embedded-io-async = "0.7"` + `heapless = "0.9"` to workspace deps; wired into meteo-lib; `embedded-io-async` into meteo-firmware arm deps. Build/clippy/test green.
 - [x] 2. RN4871 driver from datasheet + host tests — `ble/mod.rs` + `ble/rn4871.rs` (classifier, `read_line` framing, `command`/`query`, provision no-GATT sequence, advertising, `next_event`, pure `parse_version`). 18 new host tests; 29 total pass; clippy clean (verified independently).
-- [ ] 3. Firmware BLE supervisor task
-- [ ] 4. Firmware hardware wiring (main.rs)
-- [ ] 5. gaia soak script
-- [ ] 6. Build/lint/format/test gate
+- [x] 3. Firmware BLE supervisor task — `ble.rs`: generic `bring_up_once` (comms probe → provision → advertise), retry `bring_up`, `recover` (RST_N pulse), `ble_task` select-loop on keepalive Ticker vs `next_event`. (Implemented with substep 4 as one validatable changeset.)
+- [x] 4. Firmware hardware wiring (main.rs) — `mod ble;`, USART2 IRQ bind (`BufferedInterruptHandler`), `BufferedUart` PD6/PD5 + 256B StaticCell buffers, RST_N PA4, spawn `ble_task`. `cargo build -p meteo-firmware` + firmware clippy green (`BufferedUart::new` sig + alias verified vs embassy-stm32 0.5 source).
+- [x] 5. gaia soak script — `scripts/ble_soak.sh`: `set -euo pipefail`, busctl D-Bus link poll, no-scan connect-by-address, bounded poll-with-check loops, conn-param debugfs apply. shellcheck-clean, parses, executable.
+- [x] 6. Build/lint/format/test gate — `cargo fmt --check` clean; `just clippy` (firmware ARM + lib host, -D warnings) clean; `just test` 29 pass; `cargo build -p meteo-firmware` ok; `shellcheck` clean.
 - [ ] 7. Documentation
 
 Reference only (do not copy): revision `snlwmrollztk` —
