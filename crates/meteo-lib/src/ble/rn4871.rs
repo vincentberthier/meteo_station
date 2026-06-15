@@ -410,7 +410,12 @@ where
         self.factory_reset().await?;
         self.enter_command_mode().await?;
         self.command(b"SN,MeteoStation").await?;
-        self.command(b"SS,00").await?;
+        // Device Info (0x80) + Transparent UART (0x40). The module needs at
+        // least one service to accept and hold a central's connection; with
+        // SS,00 (no services) it advertises but the link never establishes
+        // (central sees HCI 0x3e "Connection Failed to be Established" and the
+        // module never emits %CONNECT). Confirmed on hardware 2026-06-15.
+        self.command(b"SS,C0").await?;
         self.command(b"SA,2").await?;
         self.command(b"SGA,0").await?;
         self.command(b"SGC,0").await?;
@@ -939,7 +944,7 @@ mod tests {
     /// 1. `factory_reset` → writes `SF,2\r`, reads `%REBOOT%`
     /// 2. `enter_command_mode` → writes `$$$`, then `V\r`, reads version line
     /// 3. `SN,MeteoStation\r` → `AOK\r\n`
-    /// 4. `SS,00\r` → `AOK\r\n`
+    /// 4. `SS,C0\r` → `AOK\r\n`
     /// 5. `SA,2\r` → `AOK\r\n`
     /// 6. `SGA,0\r` → `AOK\r\n`
     /// 7. `SGC,0\r` → `AOK\r\n`
@@ -952,7 +957,7 @@ mod tests {
         b"%REBOOT%RN4871 V1.30\r\nAOK\r\nAOK\r\nAOK\r\nAOK\r\nAOK\r\nAOK\r\nAOK\r\nAOK\r\n%REBOOT%RN4871 V1.30\r\n";
 
     #[test(tokio::test)]
-    async fn provision_emits_no_gatt_sequence() -> TestResult {
+    async fn provision_emits_expected_command_sequence() -> TestResult {
         // Given
         let mut driver = make_driver(PROVISION_RX);
 
@@ -968,8 +973,8 @@ mod tests {
             "tx should contain SN,MeteoStation\\r"
         );
         assert!(
-            tx.windows(b"SS,00\r".len()).any(|w| w == b"SS,00\r"),
-            "tx should contain SS,00\\r"
+            tx.windows(b"SS,C0\r".len()).any(|w| w == b"SS,C0\r"),
+            "tx should contain SS,C0\\r"
         );
         assert!(
             tx.windows(b"SA,2\r".len()).any(|w| w == b"SA,2\r"),
