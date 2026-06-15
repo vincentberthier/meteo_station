@@ -64,10 +64,16 @@ enum Line {
     Aok,
     Err,
     Event(Event),
+    /// The command-mode prompt (`CMD> `), present when the module runs *with*
+    /// prompts — i.e. before provisioning switches it to No-Prompt (`SR,4000`).
+    /// Callers skip it.
+    Prompt,
     Data,
 }
 
-/// Classify a raw line (without trailing `\r\n`).
+/// Classify a raw line.  Status events (`%...%`) are delimiter-framed, not
+/// newline-terminated, and the prompt (`CMD> `) carries no newline either; the
+/// reader ([`Rn4871::read_line`]) hands both here as complete tokens.
 fn classify(line: &[u8]) -> Line {
     if line == b"AOK" {
         Line::Aok
@@ -87,6 +93,8 @@ fn classify(line: &[u8]) -> Line {
             Event::Other
         };
         Line::Event(event)
+    } else if line.starts_with(b"CMD>") {
+        Line::Prompt
     } else {
         Line::Data
     }
@@ -210,10 +218,17 @@ where
         }
     }
 
-    /// Read one line from the UART into `buf`, stripping the trailing `\r`.
+    /// Read one message from the UART into `buf`.
     ///
-    /// Reads one byte at a time (cancel-safe).  Stops at `\n` or when `buf`
-    /// reaches capacity.  The `\n` byte itself is not stored.
+    /// Reads one byte at a time (cancel-safe) and returns on the first complete
+    /// message, which is any of:
+    /// - a newline-terminated line (`\n`; trailing `\r` stripped, `\n` dropped) —
+    ///   command responses such as `AOK` / `RN4871 V1.30 ...`;
+    /// - a delimiter-framed status event (`%...%`) — the RN4871 does **not**
+    ///   newline-terminate these, so waiting for `\n` would block forever on a
+    ///   `%REBOOT%` that has already fully arrived;
+    /// - the command-mode prompt (`CMD> `), which also carries no newline;
+    /// - a full buffer (defensive; avoids overflow).
     ///
     /// # Errors
     ///
@@ -235,6 +250,17 @@ where
             }
             // push cannot fail: we just verified !is_full()
             let _push_ok = buf.push(byte);
+            // A status event is complete once its closing `%` arrives: opening
+            // `%` at index 0 and a `%` just pushed (len >= 2). These are never
+            // newline-terminated, so this is the only way they ever return.
+            if buf.len() >= 2_usize && buf.first() == Some(&b'%') && byte == b'%' {
+                return Ok(());
+            }
+            // The prompt `CMD> ` has no newline; return it so it can be skipped
+            // instead of stalling the reader in prompt mode.
+            if buf.ends_with(b"CMD> ") {
+                return Ok(());
+            }
         }
     }
 
@@ -312,8 +338,8 @@ where
                     // Buffer event; keep waiting for AOK/ERR
                     let _push_ok = self.events.push_back(e);
                 }
-                Line::Data => {
-                    // Echoes or blank lines — ignore
+                Line::Prompt | Line::Data => {
+                    // Prompt (`CMD> `), echoes, or blank lines — ignore
                 }
             }
         }
@@ -335,6 +361,9 @@ where
             match classify(&line) {
                 Line::Event(e) => {
                     let _push_ok = self.events.push_back(e);
+                }
+                Line::Prompt => {
+                    // Skip the `CMD> ` prompt; the real response follows.
                 }
                 Line::Data | Line::Aok | Line::Err => {
                     // First data-ish line is the response
@@ -444,8 +473,11 @@ where
         self.command(b"SR,4000").await?;
         self.command(b"WR").await?;
 
-        // Trigger reboot
-        self.command(b"R,1").await?;
+        // Trigger reboot. `R,1` reboots immediately and replies `%REBOOT%` (an
+        // event), NOT `AOK` — so it must not go through `command()`, which would
+        // block forever waiting for an AOK that never arrives. Send it raw and
+        // wait for the reboot event below.
+        self.write_all(b"R,1\r").await?;
 
         // Wait for reboot event
         let mut line = HVec::<u8, 64>::new();
@@ -497,7 +529,7 @@ where
                     let _push_ok = self.events.push_back(e);
                     continue;
                 }
-                Line::Aok | Line::Err => {
+                Line::Prompt | Line::Aok | Line::Err => {
                     continue;
                 }
                 Line::Data => {}
@@ -588,10 +620,14 @@ where
             return Ok(e);
         }
         let mut line = HVec::<u8, 64>::new();
-        self.read_line(&mut line).await?;
-        match classify(&line) {
-            Line::Event(e) => Ok(e),
-            Line::Aok | Line::Err | Line::Data => Err(Error::BadResponse),
+        loop {
+            self.read_line(&mut line).await?;
+            match classify(&line) {
+                Line::Event(e) => return Ok(e),
+                // A bare prompt is noise between events; keep waiting.
+                Line::Prompt => {}
+                Line::Aok | Line::Err | Line::Data => return Err(Error::BadResponse),
+            }
         }
     }
 }
@@ -811,6 +847,74 @@ mod tests {
         assert!(
             matches!(event, Ok(Event::Disconnect)),
             "expected Disconnect event but got {event:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn next_event_parses_event_without_trailing_newline() -> TestResult {
+        // Given — the real RN4871 emits `%...%` events with NO trailing newline.
+        let mut drv = make_driver(b"%REBOOT%");
+
+        // When
+        let event = drv.next_event().await;
+
+        // Then — must not block waiting for a `\n` that never comes.
+        assert!(
+            matches!(event, Ok(Event::Reboot)),
+            "expected Reboot event from un-terminated %REBOOT% but got {event:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn reset_completes_on_reboot_without_newline() -> TestResult {
+        // Given — hardware sends `%REBOOT%` with no `\r\n` after a reset pulse.
+        let mut drv = make_driver(b"%REBOOT%");
+
+        // When
+        let result = drv.reset().await;
+
+        // Then — reset must detect the event token and return, not hang.
+        assert!(
+            result.is_ok(),
+            "reset should complete on un-terminated %REBOOT%, got {result:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn command_skips_prompt_before_aok() -> TestResult {
+        // Given — in prompt mode a leftover `CMD> ` (no newline) precedes AOK.
+        let mut drv = make_driver(b"CMD> AOK\r\n");
+
+        // When
+        let result = drv.command(b"SN,MeteoStation").await;
+
+        // Then
+        assert!(
+            result.is_ok(),
+            "command should skip the CMD> prompt and accept AOK, got {result:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn firmware_version_skips_prompt() -> TestResult {
+        // Given — the version response is preceded by a `CMD> ` prompt.
+        let mut drv = make_driver(b"CMD> RN4871 V1.30 3/18/2018\r\n");
+
+        // When
+        let version = drv.firmware_version().await;
+
+        // Then — the prompt must be skipped, not parsed as the version line.
+        assert!(
+            matches!(version, Ok((1_u8, 30_u8))),
+            "expected (1, 30) past the prompt but got {version:?}"
         );
 
         Ok(())
