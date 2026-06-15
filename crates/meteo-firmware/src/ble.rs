@@ -7,7 +7,7 @@ use defmt::{Debug2Format, error, info, warn};
 use embassy_futures::select::{Either, select};
 use embassy_stm32::gpio::Output;
 use embassy_stm32::usart::BufferedUart;
-use embassy_time::{Delay, Duration, Ticker};
+use embassy_time::{Delay, Duration, Ticker, with_timeout};
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::delay::DelayNs;
 use embedded_io_async::{Read, Write};
@@ -31,26 +31,42 @@ where
     D: DelayNs,
     E: core::fmt::Debug,
 {
+    info!("BLE: resetting module (waiting for %REBOOT%)");
     dev.reset().await?;
+    info!("BLE: entering command mode");
     dev.enter_command_mode().await?;
     match dev.firmware_version().await {
         Ok((maj, min)) => info!("RN4871 firmware: {}.{}", maj, min),
         Err(e) => warn!("RN4871 version unreadable: {:?}", Debug2Format(&e)),
     }
+    info!("BLE: provisioning (factory reset + NVM config)");
     dev.provision().await?;
+    info!("BLE: starting advertising");
     dev.start_advertising().await?;
     Ok(())
 }
 
 /// Retry `bring_up_once` until it succeeds.
+///
+/// Each attempt is bounded by a 20 s timeout circuit-breaker: a silent module
+/// (no UART traffic — unpowered, mis-wired, or wedged mid-handshake) makes a
+/// `reset()`/`enter_command_mode()` read block forever, so the bare future
+/// would hang the task with no diagnostic. The timeout turns that into a
+/// logged, retrying loop. It is a deadlock circuit-breaker with an explicit
+/// failure path, NOT the primary synchronisation mechanism — every step still
+/// awaits the real UART signal; the timeout only fires when that signal never
+/// comes.
 async fn bring_up(dev: &mut Rn4871<BufferedUart<'static>, Output<'static>, Delay>) {
     loop {
-        match bring_up_once(dev).await {
-            Ok(()) => {
+        match with_timeout(Duration::from_secs(20), bring_up_once(dev)).await {
+            Ok(Ok(())) => {
                 info!("BLE: advertising started");
                 return;
             }
-            Err(e) => error!("BLE bring-up failed: {:?}, retrying", Debug2Format(&e)),
+            Ok(Err(e)) => error!("BLE bring-up failed: {:?}, retrying", Debug2Format(&e)),
+            Err(_) => {
+                warn!("BLE bring-up timed out (module silent — check power/wiring/RST_N), retrying")
+            }
         }
     }
 }
@@ -78,6 +94,7 @@ async fn recover(dev: &mut Rn4871<BufferedUart<'static>, Output<'static>, Delay>
 /// is `next_event()`, which directly observes the module's `%DISCONNECT%` frame.
 #[embassy_executor::task]
 pub async fn ble_task(uart: BufferedUart<'static>, reset: Output<'static>) {
+    info!("BLE: ble_task started");
     let mut dev = Rn4871::new(uart, reset, Delay);
     bring_up(&mut dev).await;
 
