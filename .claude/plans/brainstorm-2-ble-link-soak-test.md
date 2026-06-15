@@ -667,7 +667,7 @@ debugfs params lost after a bluetooth restart → reapplied each run.
 
 Progress tracking (checked during `/tyrex:code:implement-light`):
 
-- [ ] 1. Workspace + crate dependencies
+- [x] 1. Workspace + crate dependencies — added `embedded-io-async = "0.7"` + `heapless = "0.9"` to workspace deps; wired into meteo-lib; `embedded-io-async` into meteo-firmware arm deps. Build/clippy/test green.
 - [ ] 2. RN4871 driver from datasheet + host tests
 - [ ] 3. Firmware BLE supervisor task
 - [ ] 4. Firmware hardware wiring (main.rs)
