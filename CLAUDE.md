@@ -142,6 +142,33 @@ not: the dev box has no Bluetooth radio, so run the `meteo-tui` central on
 `bluer` pulls a large D-Bus dependency tree and only needs to compile/run where a
 radio exists; host CI covers the pure-logic tests only.
 
+**Required gaia connection parameters (or GATT resolution fails).** The link to
+the station is marginal (~-89/-91 dBm at gaia), so the central must connect with
+a FAST interval — otherwise too few connection events occur per second and GATT
+service resolution cannot complete before the link drops
+(`le-connection-abort-by-local`). Set these on gaia BEFORE running the viewer
+(debugfs, resets on every `systemctl restart bluetooth` and on reboot — reapply
+each time; never reboot gaia):
+
+```sh
+doas sh -c 'echo 6   > /sys/kernel/debug/bluetooth/hci0/conn_min_interval   # 7.5 ms
+            echo 12  > /sys/kernel/debug/bluetooth/hci0/conn_max_interval   # 15 ms
+            echo 500 > /sys/kernel/debug/bluetooth/hci0/supervision_timeout' # 5 s
+```
+
+With these, GATT resolves and live Temperature/Pressure stream (verified ~2 min
+continuous). Without them the device is discovered and connects but service
+resolution aborts. (Firmware already requests good params via `ST`, but BlueZ as
+central uses its own debugfs defaults at connection time and only honours the
+peripheral's request after an update — too late for the resolution window.)
+
+**Test-methodology trap:** do NOT probe discovery with `timeout N btmgmt find` —
+SIGKILL mid-scan leaves `org.bluez` stuck `Discovering: yes` and wedges every
+later scan (returns 0 devices), which looks like "the station stopped radiating."
+Also, gaia runs `blueman-manager` which holds a continuous discovery, so a
+second `btmgmt find` can't start. To check presence, just query the cache:
+`bluetoothctl info 80:1F:12:B6:60:BF` (look for a live `RSSI:`).
+
 For debugging over SSH, run the viewer headless: `just tui-headless` (or
 `meteo-tui --no-tui`). Instead of the full-screen TUI it logs the BLE feed
 lifecycle — adapter ready, scan, discovery candidates (name + RSSI), connect,
