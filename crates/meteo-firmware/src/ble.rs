@@ -129,6 +129,15 @@ pub async fn ble_task(uart: BufferedUart<'static>, reset: Output<'static>) {
     // subscriber is wasted work and, on the RN4871, answers `Err` — which would
     // trip the recovery path and reset a perfectly healthy module once a second.
     let mut connected = false;
+    // Counts sensor samples seen while idle (not connected). Used to re-arm
+    // advertising periodically: on the RN4871 V1.30, `A,<interval>` does NOT
+    // reliably advertise forever — it goes silent after a while, leaving the
+    // device undiscoverable (it was only ever caught right after a boot). The
+    // firmware previously started advertising once and only re-armed on
+    // disconnect, so most of the time the device was dark. Re-issuing `A` on a
+    // periodic idle tick keeps it continuously discoverable (the hard full-time
+    // advertising requirement).
+    let mut idle_ticks = 0_u32;
     loop {
         match select(SENSOR_CHANNEL.receive(), dev.next_event()).await {
             Either::First(sample) => {
@@ -136,9 +145,27 @@ pub async fn ble_task(uart: BufferedUart<'static>, reset: Output<'static>) {
                 // current the instant a central connects; only push it on the wire
                 // while connected.
                 apply_sample(&mut frame, sample);
-                if connected && dev.push_frame(&frame.encode()).await.is_err() {
-                    recover(&mut dev).await;
-                    connected = false;
+                if connected {
+                    // Connected: push notifications, never touch advertising —
+                    // re-issuing `A` mid-connection disrupts the notification path.
+                    idle_ticks = 0;
+                    if dev.push_frame(&frame.encode()).await.is_err() {
+                        error!("BLE: push failed, recovering");
+                        recover(&mut dev).await;
+                        connected = false;
+                    }
+                } else {
+                    // Idle: re-arm advertising periodically. On V1.30 `A,<interval>`
+                    // does NOT advertise forever — it goes silent after a while,
+                    // leaving the device undiscoverable. This keepalive is what
+                    // makes it reliably discoverable. A clean `%DISCONNECT%` (now
+                    // handled below) returns us here promptly after any drop.
+                    idle_ticks = idle_ticks.saturating_add(1);
+                    if idle_ticks >= 5 {
+                        idle_ticks = 0;
+                        info!("BLE: re-arming advertising (keepalive)");
+                        dev.restart_advertising().await.ok();
+                    }
                 }
             }
             Either::Second(Ok(Event::Connect)) => {

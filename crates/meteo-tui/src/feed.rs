@@ -14,14 +14,13 @@
 //! tx.send(ClientEvent::Disconnected).await?;
 //! ```
 use std::error::Error;
+use std::time::Duration;
 
-use bluer::{
-    AdapterEvent, Address, Device, DiscoveryFilter, DiscoveryTransport,
-    gatt::remote::Characteristic,
-};
+use bluer::{Address, Device, DiscoveryFilter, DiscoveryTransport, gatt::remote::Characteristic};
 use futures::StreamExt as _;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::watch;
+use tokio::time::sleep;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -55,6 +54,11 @@ pub async fn run(
         .set_discovery_filter(DiscoveryFilter {
             transport: DiscoveryTransport::Le,
             pattern: Some(DEVICE_NAME.to_owned()),
+            // Report every advertising packet, not just the first. On a weak
+            // link the station's RSSI often resolves on a *later* packet than
+            // the one that first surfaced the device; without duplicates BlueZ
+            // would not re-report it and we'd never see it become "present".
+            duplicate_data: true,
             ..DiscoveryFilter::default()
         })
         .await?;
@@ -138,10 +142,36 @@ async fn run_connection(
     if device.is_connected().await? {
         debug!(%addr, "already connected");
     } else {
+        // `scan_for_device` dropped its discovery stream on return, which only
+        // *initiates* `StopDiscovery` asynchronously. Calling `Connect()` while
+        // the adapter is still discovering is rejected by BlueZ with
+        // "Operation already in progress", which then loops us back to rescan —
+        // so the live, freshly-found device never actually connects. Wait until
+        // the adapter reports discovery has stopped before connecting. Bounded
+        // poll: each iteration checks the real state and exits the moment it is
+        // false; the cap is only a deadlock circuit-breaker.
+        let mut waited = 0_u32;
+        while adapter.is_discovering().await? && waited < 100_u32 {
+            sleep(Duration::from_millis(20)).await;
+            waited = waited.saturating_add(1_u32);
+        }
         info!(%addr, "connecting");
         device.connect().await?;
         info!(%addr, "connected");
     }
+
+    // After connecting, BlueZ resolves the GATT database asynchronously. Walking
+    // services before that completes fails with "GATT services have not been
+    // resolved". Wait for the `ServicesResolved` property before continuing.
+    // Bounded poll: exits the instant resolution completes; the cap is only a
+    // circuit-breaker for a link that dies mid-resolution (then the `?` paths
+    // below error and we rescan).
+    let mut waited = 0_u32;
+    while !device.is_services_resolved().await? && waited < 150_u32 {
+        sleep(Duration::from_millis(100)).await;
+        waited = waited.saturating_add(1);
+    }
+    debug!(%addr, resolved = waited < 150_u32, "GATT resolution wait done");
 
     // 3. Find the target characteristic.  `Device::services` waits for GATT
     //    resolution internally, so a missing characteristic here means the
@@ -226,25 +256,35 @@ async fn scan_for_device(
                 return Ok(None);
             }
             ev = events.next() => {
-                match ev {
-                    Some(AdapterEvent::DeviceAdded(addr)) => {
-                        if let Some(dev) = inspect_candidate(adapter, addr).await? {
-                            return Ok(Some(dev));
-                        }
-                    }
-                    Some(AdapterEvent::DeviceRemoved(addr)) => {
-                        debug!(%addr, "device removed during scan");
-                    }
-                    Some(AdapterEvent::PropertyChanged(_)) => {}
-                    None => {
-                        // Discovery stream ended unexpectedly; rescan.
-                        warn!("discovery stream ended; rescanning");
-                        return Ok(None);
-                    }
+                // A `None` means the discovery stream ended; rescan.
+                if ev.is_none() {
+                    warn!("discovery stream ended; rescanning");
+                    return Ok(None);
+                }
+                // On ANY discovery event — device added, removed, or a property
+                // update (e.g. a late-arriving RSSI) — re-scan all currently-known
+                // devices for a present MeteoStation. Only inspecting the
+                // `DeviceAdded` address misses the common case where the device
+                // first appears without an RSSI and only becomes "present" on a
+                // later `PropertyChanged`, which is exactly what happens on a weak
+                // link.
+                if let Some(dev) = scan_known_devices(adapter).await? {
+                    return Ok(Some(dev));
                 }
             }
         }
     }
+}
+
+/// Inspect every device the adapter currently knows about and return the first
+/// present [`DEVICE_NAME`] match, or `None` if none qualifies yet.
+async fn scan_known_devices(adapter: &bluer::Adapter) -> Result<Option<Device>, bluer::Error> {
+    for addr in adapter.device_addresses().await? {
+        if let Some(dev) = inspect_candidate(adapter, addr).await? {
+            return Ok(Some(dev));
+        }
+    }
+    Ok(None)
 }
 
 /// Evaluate one discovered address: accept it only when it both advertises
