@@ -50,6 +50,13 @@ reset:
 tui:
     cargo run -p meteo-tui --target {{ host_target }}
 
+# Headless mode logs the BLE feed lifecycle to the console — much easier to
+# follow over SSH than the full-screen TUI. Tune verbosity with RUST_LOG
+# (e.g. RUST_LOG=meteo_tui=debug just tui-headless).
+[doc('Run the viewer headless, logging BLE events to the console')]
+tui-headless:
+    cargo run -p meteo-tui --target {{ host_target }} -- --no-tui
+
 # --- Code quality recipes ---
 
 [doc('Format code')]

@@ -142,6 +142,16 @@ not: the dev box has no Bluetooth radio, so run the `meteo-tui` central on
 `bluer` pulls a large D-Bus dependency tree and only needs to compile/run where a
 radio exists; host CI covers the pure-logic tests only.
 
+For debugging over SSH, run the viewer headless: `just tui-headless` (or
+`meteo-tui --no-tui`). Instead of the full-screen TUI it logs the BLE feed
+lifecycle — adapter ready, scan, discovery candidates (name + RSSI), connect,
+subscribe, readings, disconnect, and every error the feed would otherwise
+swallow — to the console via `tracing`. Tune verbosity with `RUST_LOG`
+(`RUST_LOG=meteo_tui=debug` is the default; use `=trace` for more). The feed
+purges stale cached `MeteoStation` devices at startup and accepts a peer only
+when it both advertises the name and is currently present (has an RSSI), so
+`org.bluez`'s cache no longer hands back out-of-range ghosts on every scan.
+
 ### Target Configuration
 
 Primary: STM32H753ZI (`thumbv7em-none-eabihf`)

@@ -18,6 +18,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 meteo-lib = { workspace = true }
 bluer = { version = "0.17", features = ["bluetoothd"] }
 uuid = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [lints]
 workspace = true
