@@ -677,3 +677,45 @@ Progress tracking (checked during `/tyrex:code:implement-light`):
 
 Reference only (do not copy): revision `snlwmrollztk` —
 `crates/meteo-lib/src/ble/rn4871.rs`, `crates/meteo-firmware/src/ble.rs`.
+
+## Live hardware test results (2026-06-15) — acceptance gate run
+
+Flashed to the Nucleo (ST-LINK V3) and exercised against gaia (BlueZ 5.86).
+
+**Firmware bring-up: PASS (confirmed on hardware).** RTT shows the full
+sequence: `ble_task started` → reset (`%REBOOT%` received) → command mode →
+`RN4871 firmware: 1.30` (UART RX path + `parse_version` proven) → provision →
+`advertising started`. gaia sees `MeteoStation` advertising.
+
+- First flash attempt stalled silently: the module was in an active connection
+  (prior firmware's NVM config, `Connected: yes`), so `$$$` was swallowed as
+  stream data and the bring-up read blocked forever. Fixed by
+  `fix(ble): observable self-recovering bring-up` — per-step logs + a 20 s
+  timeout circuit-breaker that converts a silent wedge into a logged retry.
+
+**Link hold: FAIL — root cause now characterised.** The soak connects then drops
+~1–3 s in. `scripts/ble_soak.sh` correctly caught it and failed loud (the
+harness itself works). `btmon` on gaia during the drop shows, repeatedly:
+
+```
+LE Enhanced Connection Complete   (Supervision timeout: 5000 msec)
+HCI Event: Disconnect Complete    Reason: Connection Failed to be Established (0x3e)
+```
+
+It is **not** supervision timeout (0x08) and **not** a conn-param-update reject —
+it is **0x3e**: the central completes the connection request but the RN4871
+peripheral never services the first connection events, so the link layer gives
+up. Live RSSI was weak (−87 to −97 dBm). Most consistent hypothesis: the
+peripheral fails the first post-connect PDU exchanges (marginal RF and/or the
+RN4871 not engaging connection events) — an RF/link-layer problem, **not** the
+driver/parser logic (which is proven correct end-to-end).
+
+**Next investigation (not a code patch):** improve RF first (proximity/antenna;
+confirm whether RSSI better than ~−80 lets the link establish), then probe the
+RN4871's post-`%CONNECT%` behaviour. 0x3e at establishment is unlikely to be
+fixed by the supervision/interval knobs.
+
+Quality aside: `cargo deny check` fails on **pre-existing** transitive issues
+(RUSTSEC-2026-0110 bare-metal, RUSTSEC-2026-0173 proc-macro-error2 — both
+"unmaintained"; plus license-allowlist gaps in `deny.toml`). Unrelated to this
+work; `cargo audit` reports no vulnerabilities.
