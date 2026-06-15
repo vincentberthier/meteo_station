@@ -129,14 +129,13 @@ pub async fn ble_task(uart: BufferedUart<'static>, reset: Output<'static>) {
     // subscriber is wasted work and, on the RN4871, answers `Err` — which would
     // trip the recovery path and reset a perfectly healthy module once a second.
     let mut connected = false;
-    // Counts sensor samples seen while idle (not connected). Used to re-arm
-    // advertising periodically: on the RN4871 V1.30, `A,<interval>` does NOT
-    // reliably advertise forever — it goes silent after a while, leaving the
-    // device undiscoverable (it was only ever caught right after a boot). The
-    // firmware previously started advertising once and only re-armed on
-    // disconnect, so most of the time the device was dark. Re-issuing `A` on a
-    // periodic idle tick keeps it continuously discoverable (the hard full-time
-    // advertising requirement).
+    // Counts sensor samples seen while idle (not connected). The real
+    // guarantee of continuous advertising is the `STA,00A0,0000,00A0`
+    // provisioning command (100 ms fast interval, no fast→slow time-out), which
+    // keeps the module advertising connectably forever instead of dropping to
+    // the default 961 ms slow phase after 30 s. This periodic re-arm is a cheap
+    // belt-and-suspenders: if advertising is already active `A` just answers
+    // `Err` (harmlessly skipped); if it ever stopped, this restarts it.
     let mut idle_ticks = 0_u32;
     loop {
         match select(SENSOR_CHANNEL.receive(), dev.next_event()).await {
@@ -153,6 +152,20 @@ pub async fn ble_task(uart: BufferedUart<'static>, reset: Output<'static>) {
                         error!("BLE: push failed, recovering");
                         recover(&mut dev).await;
                         connected = false;
+                    } else {
+                        // A `%DISCONNECT%` that arrived while the push was reading
+                        // its `AOK` is queued internally rather than delivered via
+                        // `next_event` (which we may not poll for a while when
+                        // streaming). Drain the queue now so a drop is acted on
+                        // immediately — otherwise the task stays `connected`,
+                        // never re-arms advertising, and the device goes dark.
+                        while let Some(event) = dev.take_buffered_event() {
+                            if event == Event::Disconnect {
+                                info!("BLE: disconnect drained mid-stream, re-advertising");
+                                connected = false;
+                                dev.restart_advertising().await.ok();
+                            }
+                        }
                     }
                 } else {
                     // Idle: re-arm advertising periodically. On V1.30 `A,<interval>`

@@ -54,11 +54,15 @@ pub async fn run(
         .set_discovery_filter(DiscoveryFilter {
             transport: DiscoveryTransport::Le,
             pattern: Some(DEVICE_NAME.to_owned()),
-            // Report every advertising packet, not just the first. On a weak
-            // link the station's RSSI often resolves on a *later* packet than
-            // the one that first surfaced the device; without duplicates BlueZ
-            // would not re-report it and we'd never see it become "present".
-            duplicate_data: true,
+            // Leave `duplicate_data` at its default (false). Setting it true
+            // reports EVERY advertising packet from EVERY device in range; with
+            // 20+ advertisers nearby, `scan_known_devices` (which re-inspects all
+            // cached devices over D-Bus on each event) cannot keep up and bluer's
+            // discovery stream backs up and STALLS — discovery freezes and the
+            // station is never found. With duplicates off, events fire only on
+            // real add/change, which the rescan handles comfortably; the
+            // station's RSSI still resolves in BlueZ's cache (kept fresh by the
+            // host's continuous LE scan) and is caught on the next event.
             ..DiscoveryFilter::default()
         })
         .await?;
@@ -255,19 +259,29 @@ async fn scan_for_device(
             _ = shutdown.changed() => {
                 return Ok(None);
             }
+            // Poll on a short timer, NOT only on discovery events. On a weak
+            // link the station's `RSSI` resolves on some later advertising
+            // packet, so we must re-check until it is present. We cannot lean on
+            // the event stream for that: with `duplicate_data` off, events dry up
+            // after the initial burst and never re-fire; with it on, the flood of
+            // every-packet-from-every-advertiser events backs up and stalls the
+            // stream entirely. Polling the cache (kept fresh by the adapter's
+            // active scan) every 700 ms re-inspects all known devices for a
+            // present MeteoStation regardless of event delivery — O(devices)
+            // D-Bus calls per tick, which is comfortably sustainable.
+            () = sleep(Duration::from_millis(700)) => {
+                if let Some(dev) = scan_known_devices(adapter).await? {
+                    return Ok(Some(dev));
+                }
+            }
             ev = events.next() => {
                 // A `None` means the discovery stream ended; rescan.
                 if ev.is_none() {
                     warn!("discovery stream ended; rescanning");
                     return Ok(None);
                 }
-                // On ANY discovery event — device added, removed, or a property
-                // update (e.g. a late-arriving RSSI) — re-scan all currently-known
-                // devices for a present MeteoStation. Only inspecting the
-                // `DeviceAdded` address misses the common case where the device
-                // first appears without an RSSI and only becomes "present" on a
-                // later `PropertyChanged`, which is exactly what happens on a weak
-                // link.
+                // Also react immediately to events (faster than the poll when
+                // they do arrive).
                 if let Some(dev) = scan_known_devices(adapter).await? {
                     return Ok(Some(dev));
                 }

@@ -89,11 +89,13 @@ fn classify(line: &[u8]) -> Line {
             Event::Reboot
         } else if inner.starts_with(b"CONNECT") {
             Event::Connect
-        } else if inner == b"DISCONNECT" {
+        } else if inner.starts_with(b"DISCONNECT") {
             Event::Disconnect
         } else if inner == b"STREAM_OPEN" {
             Event::StreamOpen
         } else {
+            #[cfg(feature = "defmt")]
+            defmt::warn!("RN4871 unrecognized %event%: {=[u8]:a}", inner);
             Event::Other
         };
         Line::Event(event)
@@ -500,7 +502,20 @@ where
         self.enter_command_mode().await?;
 
         self.command(b"SN,MeteoStation").await?;
-        self.command(b"SS,80").await?;
+        // Disable ALL default server services (`SS,00`): we expose only the one
+        // custom notify characteristic (defined below via `PS`/`PC`), so the
+        // Microchip-provided Device Information service (`0x80`) is dead weight.
+        // Every default-service attribute is one more ATT read the central must
+        // do during GATT service resolution; on a lossy link those extra
+        // round-trips are exactly what lets a packet loss trip the supervision
+        // timer mid-resolution and abort the connection
+        // (`le-connection-abort-by-local`). With `SS,00` the GATT table is just
+        // GAP + GATT (mandatory) + our service, so resolution completes in a
+        // handful of round-trips and finishes inside the fragile
+        // initial-connection window. The value handle is discovered dynamically
+        // (`discover_char_handle`), so the resulting handle renumbering is a
+        // non-issue.
+        self.command(b"SS,00").await?;
         // Max RF output power for advertising and connection. Per the RN4870/71
         // user guide §2.4.16, `SGA,0`/`SGC,0` is the HIGHEST power (0 dBm); 5 is
         // lowest. The factory reset can leave power below max, giving a very weak
@@ -512,6 +527,42 @@ where
         // of dropping ~1×/s. ST,<min>,<max>,<latency>,<timeout>: interval ×1.25 ms,
         // timeout ×10 ms. 20–40 ms interval, 0 latency, 6 s supervision timeout.
         self.command(b"ST,0010,0020,0000,0258").await?;
+        // Advertise CONTINUOUSLY and connectably. THIS is the fix for the
+        // "discovers but won't connect / works ~30 s then dies" failure. By
+        // default (and with a bare `A`) the RN4871 advertises fast (20 ms) for
+        // only 30 s, then drops to a 961 ms low-power *slow* advertisement
+        // (RN4870/71 User Guide). On a marginal link that slow phase is the
+        // killer: discovery still occasionally catches a slow packet, but a
+        // central's `Connect()` keeps racing the ~1 s gaps and times out
+        // (`le-connection-abort-by-local`). The old 40 s "good" windows were
+        // simply the ones straddling the 30 s fast→slow transition.
+        //
+        // `STA,<fast_int>,<fast_to>,<slow_int>`: intervals in 0.625 ms units,
+        // fast time-out in 10.24 s units. Do NOT use a `0` time-out: despite the
+        // generic BLE "0 = no timeout" convention, the RN4871 V1.30 treats a 0
+        // fast time-out as "advertise for zero time" — `A` returns AOK and the
+        // module reports advertising, but NOTHING radiates (verified: a central
+        // catches ~20 other devices yet zero MeteoStation packets). Use a large
+        // real time-out (0xFFFF × 10.24 s ≈ 186 h) so fast advertising runs
+        // effectively forever, and set the slow interval equal to the fast one
+        // so even past the time-out the device keeps advertising at the same
+        // rate. 20 ms (0x0020) is the fastest standard connectable interval
+        // (~150 adv events/s across the three primary channels): on a marginal
+        // link that is the difference between a central catching a packet within
+        // a scan window and missing the device entirely. Advertising rate does
+        // not affect connection-establishment timing, so this is a pure
+        // discovery win.
+        // `STA,<fast_int>,<fast_to>,<slow_int>`: intervals in 0.625 ms units,
+        // fast time-out in 10.24 s units. Hold off the default fast→slow
+        // transition (which after 30 s drops to a 961 ms low-power advertisement
+        // that makes a central's `Connect()` race ~1 s gaps and time out) by
+        // using a large real fast time-out (0xFFFF × 10.24 s ≈ 186 h ≈ forever)
+        // and a slow interval equal to the fast one, so the device advertises at
+        // 20 ms continuously for any realistic session. 20 ms (0x0020) is the
+        // fastest standard connectable interval — best discovery on a marginal
+        // link — and advertising rate does not affect connection-establishment
+        // timing, so it is a pure discovery win.
+        self.command(b"STA,0020,FFFF,0020").await?;
         self.command(b"PZ").await?;
 
         // Format SERVICE_UUID as 32 uppercase hex chars
@@ -629,12 +680,12 @@ where
     /// Returns [`Error::Io`] on UART failure, or [`Error::Command`] if the
     /// module rejects the command.
     pub async fn start_advertising(&mut self) -> Result<(), Error<E>> {
-        // `A,<interval>` with a SINGLE parameter (no total-time) advertises
-        // FOREVER at that interval. The bare `A` only fast-advertises for 30 s
-        // then drops off, leaving the device dark while idle — which fails the
-        // hard requirement that it advertise full-time whenever nothing is
-        // connected. 0x00A0 = 160 ms interval.
-        self.command(b"A,00A0").await
+        // `A,0020` starts advertising at a 20 ms interval, passed explicitly
+        // (the form proven to radiate so a central catches the device). The
+        // fast→slow transition that would otherwise drop to 961 ms after 30 s is
+        // held off by the `STA` time-out set in `provision()`, so the device
+        // advertises connectably at 20 ms continuously.
+        self.command(b"A,0020").await
     }
 
     /// Re-start advertising fire-and-forget: write `A` without awaiting `AOK`.
@@ -648,9 +699,9 @@ where
     ///
     /// Returns [`Error::Io`] on UART failure.
     pub async fn restart_advertising(&mut self) -> Result<(), Error<E>> {
-        // Same single-parameter form as `start_advertising` so the device
-        // resumes FULL-TIME advertising (no 30 s cutoff) after a disconnect.
-        self.write_all(b"A,00A0\r").await
+        // Same interval form as `start_advertising` (`A,0020`) so the device
+        // resumes its 20 ms continuous advertising after a disconnect.
+        self.write_all(b"A,0020\r").await
     }
 
     /// Encode `frame` bytes as hex and write them to the characteristic via `SHW`.
@@ -683,6 +734,20 @@ where
         }
 
         self.command(&cmd).await
+    }
+
+    /// Pop one already-buffered event without touching the UART.
+    ///
+    /// Events arriving in the middle of a `command()`/`push_frame()` exchange are
+    /// queued internally (so the in-flight command can still re-sync on its
+    /// `AOK`/`ERR`). When streaming notifications, the supervisor pushes a frame
+    /// per sample and may not call [`next_event`](Self::next_event) for a while,
+    /// so a `%DISCONNECT%` buffered during a push would sit unobserved and leave
+    /// the task stuck believing it is still connected (advertising never
+    /// re-armed → device goes dark). Draining the queue right after each push
+    /// closes that window without ever blocking on the UART.
+    pub fn take_buffered_event(&mut self) -> Option<Event> {
+        self.events.pop_front()
     }
 
     /// Return the next buffered event, or read one line from the UART and
