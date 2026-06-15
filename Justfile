@@ -16,13 +16,9 @@ default:
 
 # --- Build recipes ---
 
-# meteo-tui is host-only (ratatui/tokio/bluer); the default target is the
-# embedded one, so it needs an explicit host target or it would try to build for
-# thumbv7em and fail.
-[doc('Build firmware (release) and the TUI viewer')]
+[doc('Build firmware (release)')]
 build:
     cargo build --release -p meteo-firmware
-    cargo build --release -p meteo-tui --target {{ host_target }}
 
 [doc('Clean build artifacts')]
 clean:
@@ -46,34 +42,23 @@ run: build
 reset:
     probe-rs reset --chip {{ chip }} --connect-under-reset
 
-[doc('Run the TUI viewer')]
-tui:
-    cargo run -p meteo-tui --target {{ host_target }}
-
-# Headless mode logs the BLE feed lifecycle to the console — much easier to
-# follow over SSH than the full-screen TUI. Tune verbosity with RUST_LOG
-# (e.g. RUST_LOG=meteo_tui=debug just tui-headless).
-[doc('Run the viewer headless, logging BLE events to the console')]
-tui-headless:
-    cargo run -p meteo-tui --target {{ host_target }} -- --no-tui
-
 # --- Code quality recipes ---
 
 [doc('Format code')]
 format:
     cargo fmt -- --emit=files
 
-# meteo-firmware is no_std/thumbv7em; meteo-tui is host-only (ratatui/tokio).
-# Lint each on its own target — a single workspace clippy would try to build the
-# host crate (and its deps) for the embedded target and fail.
+# meteo-firmware is no_std/thumbv7em; meteo-lib is hardware-agnostic and lints on
+# the host target, where its tests run. Linting on separate targets avoids trying
+# to build host code for the embedded target (or vice versa).
 [doc('Check code with clippy')]
 clippy:
     cargo clippy -p meteo-firmware -- -D warnings
-    cargo clippy -p meteo-lib -p meteo-tui --all-features --all-targets --target {{ host_target }} -- -D warnings
+    cargo clippy -p meteo-lib --all-features --all-targets --target {{ host_target }} -- -D warnings
 
 [doc('Run tests on host')]
 test:
-    cargo nextest run -p meteo-lib -p meteo-tui --target {{ host_target }}
+    cargo nextest run -p meteo-lib --target {{ host_target }}
 
 # Ignored advisories (unmaintained transitive deps) are documented in
 # .cargo/audit.toml; cargo-audit reads it automatically.

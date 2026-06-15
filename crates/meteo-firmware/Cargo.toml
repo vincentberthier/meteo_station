@@ -22,7 +22,6 @@ embassy-sync = { workspace = true }
 embassy-time = { workspace = true }
 embedded-hal = { workspace = true }
 embedded-hal-async = { workspace = true }
-embedded-io-async = { workspace = true }
 panic-probe = { workspace = true }
 static_cell = { workspace = true }
 
