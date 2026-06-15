@@ -68,8 +68,13 @@ fail() {
 # apply_conn_params — write BlueZ debugfs connection parameters via doas.
 # These are reset by "systemctl restart bluetooth"; reapply each run.
 apply_conn_params() {
-    printf '%s' "$CONN_MIN"    | doas tee "${DEBUGFS}/conn_min_interval"    >/dev/null
+    # The kernel enforces conn_min_interval <= conn_max_interval on every write,
+    # so a naive min-then-max order fails with "Invalid argument" whenever the
+    # new min exceeds the *current* max (e.g. widening 6/12 -> 24/40). Drop min
+    # to the floor (6) first so any max write is valid, set max, then set min.
+    printf '%s' "6"            | doas tee "${DEBUGFS}/conn_min_interval"    >/dev/null
     printf '%s' "$CONN_MAX"    | doas tee "${DEBUGFS}/conn_max_interval"    >/dev/null
+    printf '%s' "$CONN_MIN"    | doas tee "${DEBUGFS}/conn_min_interval"    >/dev/null
     printf '%s' "$SUPERVISION" | doas tee "${DEBUGFS}/supervision_timeout"  >/dev/null
     log "conn params applied: min=${CONN_MIN} max=${CONN_MAX} supervision=${SUPERVISION}"
 }
