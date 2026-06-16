@@ -3,9 +3,9 @@
 
 # --- Variables ---
 
-target := "thumbv7em-none-eabihf"
+target := "riscv32imac-unknown-none-elf"
 host_target := "x86_64-unknown-linux-gnu"
-chip := "STM32H753ZITx"
+chip := "esp32h2"
 binary := "target" / target / "release/meteo-firmware"
 
 # --- Default recipe ---
@@ -26,21 +26,21 @@ clean:
 
 [doc('Show binary size information')]
 size: build
-    arm-none-eabi-size {{ binary }}
+    size {{ binary }}
 
 # --- Flash & run recipes ---
 
 [doc('Flash firmware to device')]
 flash: build
-    probe-rs run --chip {{ chip }} {{ binary }}
+    espflash flash --chip {{ chip }} {{ binary }}
 
-[doc('Flash and attach with RTT logging')]
+[doc('Flash and attach with defmt logging over USB-Serial-JTAG')]
 run: build
-    probe-rs run --chip {{ chip }} {{ binary }}
+    espflash flash --monitor --chip {{ chip }} --log-format defmt {{ binary }}
 
-[doc('Reset device under connect-under-reset')]
+[doc('Reset the device')]
 reset:
-    probe-rs reset --chip {{ chip }} --connect-under-reset
+    espflash reset
 
 # --- Code quality recipes ---
 

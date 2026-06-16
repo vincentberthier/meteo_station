@@ -1,33 +1,39 @@
 # meteo_station
 
-Weather-station firmware in embedded Rust for the STM32H753ZI (Nucleo-144),
-built on the [Embassy](https://embassy.dev) async runtime (`no_std`).
+Weather-station firmware in embedded Rust for the ESP32-H2 (ESP32-H2-DevKitM-1),
+built on the [Embassy](https://embassy.dev) async runtime over esp-hal + esp-rtos
+(`no_std`, `riscv32imac-unknown-none-elf`).
 
 ## Workspace layout
 
-- `crates/meteo-firmware` — STM32H753ZI binary: hardware init, interrupt
-  bindings, Embassy tasks.
+- `crates/meteo-firmware` — ESP32-H2 binary: esp-hal/esp-rtos init, GPIO8 status
+  LED, Embassy tasks. esp deps are gated to `cfg(target_arch = "riscv32")`.
 - `crates/meteo-lib` — hardware-agnostic drivers (host-testable) using
-  `embedded-hal-async` traits: BMP388 barometer, RN4871 BLE link.
+  `embedded-hal-async` traits: BMP388 barometer, plus an RN4871 BLE parser kept
+  for its host tests (not flashed; the H2 uses on-chip BLE, brought up later).
 
 ## Build & flash
 
 ```bash
-just build     # release firmware
-just flash      # flash to device
-just run        # flash + attach RTT logging
-just clippy     # firmware (ARM) + meteo-lib (host), -D warnings
+just build     # release firmware (riscv32imac)
+just flash      # flash to device (espflash, over native USB-Serial-JTAG)
+just run        # flash + attach defmt monitor
+just clippy     # firmware (riscv) + meteo-lib (host), -D warnings
 just test       # host unit tests (cargo nextest, meteo-lib)
 just format     # cargo fmt
 ```
 
-See `CLAUDE.md` for the pin allocation, datasheets, and the safe `probe-rs`
-testing procedure.
+See `CLAUDE.md` for the pin allocation, datasheets, and the espflash logging
+procedure.
 
 ## BLE link soak test — `scripts/ble_soak.sh`
 
+> **Historical (STM32 + RN4871).** The ESP32-H2 port dropped the external RN4871
+> module; native on-chip BLE is a later task. This harness and the `meteo-lib`
+> RN4871 parser are retained for that work and for the methodology below.
+
 A self-validating acceptance harness for the RN4871 BLE link. The firmware
-brings the module up as device `80:1F:12:B6:60:BF`, advertising continuously
+brought the module up as device `80:1F:12:B6:60:BF`, advertising continuously
 with no GATT services. The host unit tests only prove the protocol parser; the
 **soak test is the real acceptance gate** for the radio link.
 

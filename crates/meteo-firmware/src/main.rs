@@ -1,99 +1,75 @@
 #![no_std]
 #![no_main]
 #![expect(
+    clippy::expect_used,
+    reason = "firmware init: no recovery from a failed peripheral init or spawn"
+)]
+#![expect(
     clippy::missing_asserts_for_indexing,
     reason = "false positives from defmt macro expansion"
 )]
 #![expect(
-    clippy::absolute_paths,
-    reason = "false positives from bind_interrupts! macro expansion"
-)]
-#![expect(
     clippy::future_not_send,
-    reason = "Embassy executor is single-threaded, Spawner is !Send by design"
-)]
-#![expect(
-    clippy::expect_used,
-    reason = "firmware main: no recovery from failed spawn or peripheral init"
+    reason = "Embassy/esp-rtos executor is single-threaded; Spawner and task futures are !Send by design"
 )]
 
-mod ble;
 mod bmp;
-mod leds;
 
-use defmt::*;
+use defmt::info;
 use embassy_executor::Spawner;
-use embassy_stm32::gpio::{Level, Output, Speed};
-use embassy_stm32::i2c::{Config as I2cConfig, I2c};
-use embassy_stm32::usart::{BufferedUart, Config as UartConfig};
-use embassy_stm32::{Config, bind_interrupts, peripherals};
 use embassy_time::{Duration, Timer};
-use static_cell::StaticCell;
-use {defmt_rtt as _, panic_probe as _};
+use esp_hal::clock::CpuClock;
+use esp_hal::gpio::{Level, Output, OutputConfig};
+use esp_hal::i2c::master::{Config as I2cConfig, I2c};
+use esp_hal::interrupt::software::SoftwareInterruptControl;
+use esp_hal::time::Rate;
+use esp_hal::timer::timg::TimerGroup;
+use {esp_backtrace as _, esp_println as _};
 
-bind_interrupts!(struct Irqs {
-    I2C1_EV => embassy_stm32::i2c::EventInterruptHandler<peripherals::I2C1>;
-    I2C1_ER => embassy_stm32::i2c::ErrorInterruptHandler<peripherals::I2C1>;
-    USART2 => embassy_stm32::usart::BufferedInterruptHandler<peripherals::USART2>;
-});
+// The ESP-IDF second-stage bootloader (espflash v4) needs this app descriptor in
+// the image to boot it.
+esp_bootloader_esp_idf::esp_app_desc!();
 
-static TX_BUF: StaticCell<[u8; 256]> = StaticCell::new();
-static RX_BUF: StaticCell<[u8; 256]> = StaticCell::new();
+/// BMP388 I2C address (SDO tied high). The shared bus also leaves 0x76 free for a
+/// future BME280.
+const BMP388_ADDR: u8 = 0x77;
 
-#[embassy_executor::main]
+#[esp_rtos::main]
 async fn main(spawner: Spawner) {
-    info!("Starting Nucleo H753ZI Weather Station");
-    let p = embassy_stm32::init(Config::default());
+    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+    let peripherals = esp_hal::init(config);
 
-    // User LEDs: LD1 (green) = PB0, LD2 (yellow) = PE1, LD3 (red) = PB14
-    let led_green = Output::new(p.PB0, Level::Low, Speed::Low);
-    let led_yellow = Output::new(p.PE1, Level::Low, Speed::Low);
-    spawner
-        .spawn(leds::blink_led_green(led_green))
-        .expect("blink_led_green already spawned");
-    spawner
-        .spawn(leds::blink_led_yellow(led_yellow))
-        .expect("blink_led_yellow already spawned");
+    info!("Starting ESP32-H2 Weather Station");
 
-    // External LED on breadboard: D49 (CN8 pin 14) = PG2
-    let led_external = Output::new(p.PG2, Level::Low, Speed::Low);
-    spawner
-        .spawn(leds::blink_led_external(led_external))
-        .expect("blink_led_external already spawned");
+    // Start the esp-rtos scheduler: it owns timer group 0 (the embassy time driver)
+    // and the FROM_CPU0 software interrupt that drives the thread-mode executor.
+    let timg0 = TimerGroup::new(peripherals.TIMG0);
+    let sw_int = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
-    // I2C1 for BMP388 on ZIO connector CN7:
-    //   D15 (pin 2) = I2C_A_SCL = PB8
-    //   D14 (pin 4) = I2C_A_SDA = PB9
-    let mut i2c_config = I2cConfig::default();
-    i2c_config.scl_pullup = true;
-    i2c_config.sda_pullup = true;
+    // BMP388 on I2C0: SDA = GPIO10 (J3/4), SCL = GPIO11 (J3/5). External 4.7 kΩ
+    // pull-ups to 3V3 on the bus.
     let i2c = I2c::new(
-        p.I2C1, p.PB8, p.PB9, Irqs, p.DMA1_CH0, p.DMA1_CH1, i2c_config,
-    );
-    spawner
-        .spawn(bmp::read_barometer(i2c))
-        .expect("read_barometer already spawned");
-
-    // USART2 for RN4871 BLE module (CN9): D52 = PD6 (RX), D53 = PD5 (TX).
-    // RST_N = PA4 (CN7 pin 17), active-low, deasserted high at init.
-    let uart = BufferedUart::new(
-        p.USART2,
-        p.PD6,
-        p.PD5,
-        TX_BUF.init([0_u8; 256]),
-        RX_BUF.init([0_u8; 256]),
-        Irqs,
-        UartConfig::default(),
+        peripherals.I2C0,
+        I2cConfig::default().with_frequency(Rate::from_khz(100)),
     )
-    .expect("USART2 init");
-    let rst_n = Output::new(p.PA4, Level::High, Speed::Low);
-    spawner
-        .spawn(ble::ble_task(uart, rst_n))
-        .expect("ble_task already spawned");
+    .expect("I2C0 init")
+    .with_sda(peripherals.GPIO10)
+    .with_scl(peripherals.GPIO11)
+    .into_async();
+    spawner.spawn(bmp::read_barometer(i2c, BMP388_ADDR).expect("read_barometer already spawned"));
+
+    // Status LED on GPIO8 (the external LED + the onboard WS2812 share this line).
+    // Driven as a plain GPIO: the external LED blinks; the WS2812 stays dark since a
+    // plain toggle is not a valid addressable-LED data stream. See the note in the
+    // workspace Cargo.toml for the colour-capable alternative.
+    let mut led = Output::new(peripherals.GPIO8, Level::Low, OutputConfig::default());
 
     info!("Init complete!");
 
+    // Liveness indicator: a steady blink so a stalled executor shows as a frozen LED.
     loop {
-        Timer::after(Duration::from_millis(5_000)).await;
+        led.toggle();
+        Timer::after(Duration::from_millis(500)).await;
     }
 }

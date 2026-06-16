@@ -1,8 +1,21 @@
 [build]
-target = "thumbv7em-none-eabihf"
+target = "riscv32imac-unknown-none-elf"
 
-[target.thumbv7em-none-eabihf]
-runner = "probe-rs run --chip STM32H753ZITx"
+[target.riscv32imac-unknown-none-elf]
+# Flash over the native USB-Serial-JTAG and stream defmt logs. espflash decodes the
+# defmt framing from the same ELF it just flashed.
+runner = "espflash flash --monitor --chip esp32h2 --log-format defmt"
+# linkall.x (esp-hal) defines the memory regions, trap/vector symbols and stack;
+# defmt.x places the defmt interned strings. Frame pointers let esp-backtrace
+# produce usable stack traces on RISC-V.
+rustflags = [
+    "-C",
+    "link-arg=-Tlinkall.x",
+    "-C",
+    "link-arg=-Tdefmt.x",
+    "-C",
+    "force-frame-pointers",
+]
 
 [env]
 DEFMT_LOG = "trace"

@@ -1,0 +1,5 @@
+{
+  "enabledPlugins": {
+    "tyrex-lang-rust@tyrex-plugins": true
+  }
+}

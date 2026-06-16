@@ -3,21 +3,18 @@
     reason = "false positives from defmt macro expansion"
 )]
 
-use defmt::*;
-use embassy_stm32::i2c::{I2c, Master};
-use embassy_stm32::mode::Async;
+use defmt::{Debug2Format, debug, error, info, warn};
 use embassy_time::{Duration, Timer};
+use esp_hal::Async;
+use esp_hal::i2c::master::I2c;
 use meteo_lib::bmp388::Bmp388;
 use meteo_lib::trunc2;
 
-const BMP388_ADDR: u8 = 0x77;
-
 #[embassy_executor::task]
-pub async fn read_barometer(i2c: I2c<'static, Async, Master>) {
+pub async fn read_barometer(i2c: I2c<'static, Async>, address: u8) {
     debug!("Setting up barometer");
-    Timer::after(Duration::from_millis(100)).await;
 
-    let mut sensor = match Bmp388::new(i2c, BMP388_ADDR).await {
+    let mut sensor = match Bmp388::new(i2c, address).await {
         Ok(s) => {
             info!("BMP388 initialized successfully!");
             s

@@ -6,25 +6,19 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-# Workspace library
+# Workspace library (hardware-agnostic drivers; embedded-hal-async based)
 meteo-lib = { workspace = true, features = ["defmt"] }
 
-# Target-specific dependencies (embedded only)
-[target.'cfg(target_arch = "arm")'.dependencies]
-cortex-m = { workspace = true }
-cortex-m-rt = { workspace = true }
+# Target-specific dependencies (ESP32-H2, riscv32imac-unknown-none-elf only)
+[target.'cfg(target_arch = "riscv32")'.dependencies]
 defmt = { workspace = true }
-defmt-rtt = { workspace = true }
 embassy-executor = { workspace = true }
-embassy-futures = { workspace = true }
-embassy-stm32 = { workspace = true }
-embassy-sync = { workspace = true }
 embassy-time = { workspace = true }
-embedded-hal = { workspace = true }
-embedded-hal-async = { workspace = true }
-embedded-io-async = { workspace = true }
-panic-probe = { workspace = true }
-static_cell = { workspace = true }
+esp-hal = { workspace = true }
+esp-rtos = { workspace = true }
+esp-println = { workspace = true }
+esp-backtrace = { workspace = true }
+esp-bootloader-esp-idf = { workspace = true }
 
 [lints]
 workspace = true
