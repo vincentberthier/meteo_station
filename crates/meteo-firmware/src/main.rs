@@ -13,6 +13,7 @@
     reason = "Embassy/esp-rtos executor is single-threaded; Spawner and task futures are !Send by design"
 )]
 
+mod ble;
 mod bmp;
 
 use defmt::info;
@@ -24,6 +25,8 @@ use esp_hal::i2c::master::{Config as I2cConfig, I2c};
 use esp_hal::interrupt::software::SoftwareInterruptControl;
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
+use esp_radio::ble::Config as BleConfig;
+use esp_radio::ble::controller::BleConnector;
 use {esp_backtrace as _, esp_println as _};
 
 // The ESP-IDF second-stage bootloader (espflash v4) needs this app descriptor in
@@ -34,18 +37,36 @@ esp_bootloader_esp_idf::esp_app_desc!();
 /// future BME280.
 const BMP388_ADDR: u8 = 0x77;
 
+/// Thin `'static`-spawnable wrapper for the BLE task.
+#[embassy_executor::task]
+async fn ble_task(controller: ble::Controller) {
+    ble::run(controller).await;
+}
+
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
+    // Heap must be initialised before esp_rtos::start and before BleConnector::new.
+    // 72 KiB is sufficient for the trouble-host BLE stack; ESP32-H2 has 320 KiB SRAM.
+    esp_alloc::heap_allocator!(size: 72 * 1024);
+
     info!("Starting ESP32-H2 Weather Station");
 
     // Start the esp-rtos scheduler: it owns timer group 0 (the embassy time driver)
     // and the FROM_CPU0 software interrupt that drives the thread-mode executor.
+    // IMPORTANT (per esp-radio docs): the scheduler must be started BEFORE the radio.
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let sw_int = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
+
+    // BLE: create the HCI connector and wrap it in an ExternalController for trouble-host.
+    // BleConnector::new must be called AFTER esp_rtos::start (radio requires the scheduler).
+    let connector =
+        BleConnector::new(peripherals.BT, BleConfig::default()).expect("BLE controller init");
+    let controller: ble::Controller = trouble_host::prelude::ExternalController::new(connector);
+    spawner.spawn(ble_task(controller).expect("ble_task already spawned"));
 
     // BMP388 on I2C0: SDA = GPIO10 (J3/4), SCL = GPIO11 (J3/5). External 4.7 kΩ
     // pull-ups to 3V3 on the bus.

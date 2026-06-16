@@ -16,11 +16,16 @@ meteo-lib = { workspace = true, features = ["defmt"] }
 defmt = { workspace = true }
 embassy-executor = { workspace = true }
 embassy-time = { workspace = true }
+embassy-sync = { workspace = true }
+embassy-futures = { workspace = true }
 esp-hal = { workspace = true }
 esp-rtos = { workspace = true }
 esp-println = { workspace = true }
 esp-backtrace = { workspace = true }
 esp-bootloader-esp-idf = { workspace = true }
+esp-radio = { workspace = true }
+esp-alloc = { workspace = true }
+trouble-host = { workspace = true }
 
 [lints]
 workspace = true
