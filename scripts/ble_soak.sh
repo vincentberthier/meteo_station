@@ -2,12 +2,13 @@
 # ble_soak.sh — BLE link soak-test harness for gaia (BlueZ 5.86)
 #
 # Purpose:
-#   Continuously exercises the BLE link to the RN4871 weather-station peripheral:
-#   connect → hold HOLD_SECS → disconnect → gap GAP_SECS → reconnect → …
-#   Any mid-window drop or failed reconnect produces a loud non-zero exit.
+#   Continuously exercises the BLE link to the on-chip ESP32-H2 BLE peripheral
+#   (MeteoStation): connect → hold HOLD_SECS → disconnect → gap GAP_SECS →
+#   reconnect → …  Any mid-window drop or failed reconnect produces a loud
+#   non-zero exit.
 #
 # Environment knobs (all optional, shown with defaults):
-#   DEVICE          — BLE address of the peripheral          (80:1F:12:B6:60:BF)
+#   DEVICE          — BLE address of the peripheral          (F0:CA:FE:00:00:01)
 #   ADAPTER         — local HCI adapter name                 (hci0)
 #   HOLD_SECS       — seconds the link must stay up per cycle (360)
 #   GAP_SECS        — seconds between disconnect and reconnect (90)
@@ -32,7 +33,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Configuration (env-overridable)
 # ---------------------------------------------------------------------------
-DEVICE="${DEVICE:-80:1F:12:B6:60:BF}"
+DEVICE="${DEVICE:-F0:CA:FE:00:00:01}"
 ADAPTER="${ADAPTER:-hci0}"
 HOLD_SECS="${HOLD_SECS:-360}"
 GAP_SECS="${GAP_SECS:-90}"
@@ -89,21 +90,41 @@ is_connected() {
 }
 
 # device_known — preflight cache check.
-# The script never scans; blueman's standing discovery must populate the cache.
 device_known() {
     bluetoothctl info "$DEVICE" 2>/dev/null | grep -q 'Device '
 }
 
-# wait_known — bounded wait for device to appear in the BlueZ cache.
-# Called once before the first cycle.  Returns non-zero after CONNECT_TIMEOUT
-# iterations.  Each iteration checks the real cache state (poll-with-check).
-wait_known() {
+# adapter_discovering — 0 if the adapter is currently scanning.
+adapter_discovering() {
+    bluetoothctl show "$ADAPTER" 2>/dev/null | grep -q 'Discovering: yes'
+}
+
+# ensure_cached — make sure the device is in the BlueZ cache before connecting.
+# Prefer blueman's standing discovery; if the device is absent (e.g. evicted
+# during a long GAP_SECS), fall back to ONE bounded, self-terminating
+# `bluetoothctl --timeout` discovery. That exits cleanly (StopDiscovery on its
+# own) — unlike a `timeout … btmgmt find` SIGKILL or a left-running `scan on`,
+# both of which wedge the adapter in "Discovering: yes". Verified to leave the
+# adapter idle afterwards.
+ensure_cached() {
+    if device_known; then
+        return 0
+    fi
+    log "device not cached; running a bounded ${CONNECT_TIMEOUT}s discovery"
+    bluetoothctl --timeout "$CONNECT_TIMEOUT" scan on >/dev/null 2>&1 &
     local n=0
     until device_known; do
         sleep 1
         n=$((n + 1))
-        [ "$n" -ge "$CONNECT_TIMEOUT" ] && return 1
+        [ "$n" -ge "$CONNECT_TIMEOUT" ] && break
     done
+    local w=0
+    while adapter_discovering; do
+        sleep 1
+        w=$((w + 1))
+        [ "$w" -ge 5 ] && break
+    done
+    device_known
 }
 
 # wait_connected — issue connect, then bounded poll until Connected == true.
@@ -153,10 +174,10 @@ trap 'log "interrupted"; cleanup; exit 0' INT
 
 apply_conn_params
 
-if ! wait_known; then
+if ! ensure_cached; then
     log "FATAL: $DEVICE not in BlueZ cache within ${CONNECT_TIMEOUT}s."
-    log "  -> ensure the device is powered/advertising and blueman discovery is running."
-    log "  -> after a 'systemctl restart bluetooth', let blueman re-discover before re-running."
+    log "  -> ensure the device is powered/advertising."
+    log "  -> after a 'systemctl restart bluetooth', re-run."
     exit 1
 fi
 
@@ -164,6 +185,7 @@ cycle=0
 while true; do
     cycle=$((cycle + 1))
     log "cycle=$cycle: connecting"
+    ensure_cached || fail "$cycle" "device left the BlueZ cache and discovery did not recover it"
     wait_connected || fail "$cycle" "connect/re-advertise within ${CONNECT_TIMEOUT}s"
     log "cycle=$cycle: connected, holding ${HOLD_SECS}s"
     hold || fail "$cycle" "link dropped before ${HOLD_SECS}s hold completed"

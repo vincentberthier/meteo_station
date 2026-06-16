@@ -8,9 +8,10 @@ Currently supports:
 - Status LED on GPIO8
 
 > Ported from the STM32H753ZI (Nucleo-144). The on-chip BLE 5.3 radio replaces the
-> external RN4871 module, so the RN4871/USART path was dropped (bringing up native
-> BLE via esp-radio/trouble is a separate, later task). The `meteo-lib` RN4871
-> parser is kept for its host tests.
+> external RN4871 module (RN4871/USART path dropped). On-chip BLE telemetry is now
+> implemented: the firmware advertises as `MeteoStation`, exposes a GATT notify
+> characteristic, and pushes sensor data at 1 Hz, with an RWDT heartbeat supervisor.
+> On-device acceptance via the gaia soak harness is a pending manual gate.
 
 ## Build Commands
 
@@ -79,12 +80,17 @@ crates/
 ├── meteo-firmware/        # Binary crate: ESP32-H2-specific (riscv32imac)
 │   └── src/
 │       ├── main.rs        # esp-hal/esp-rtos init, GPIO8 LED blink, task spawning
-│       └── bmp.rs         # BMP388 task; reads and logs barometer samples
+│       ├── bmp.rs         # BMP388 task; reads and logs barometer samples
+│       ├── ble.rs         # On-chip BLE stack: controller, manual GATT server,
+│       │                  #   advertise loop, 1 Hz notify (esp-radio + trouble-host)
+│       └── watchdog.rs    # RWDT heartbeat supervisor (watches ADV_BEAT + BLE_BEAT)
 └── meteo-lib/             # Library crate: hardware-agnostic
     └── src/
         ├── lib.rs         # Re-exports sensor drivers and utilities
         ├── utils.rs       # Utility functions (trunc2, etc.)
-        ├── ble/           # RN4871 parser (kept for host tests; not flashed)
+        ├── ble/
+        │   └── frame.rs   # v1 wire frame: Telemetry, encode/decode, FrameError,
+        │                  #   sentinels; host-tested; decode() targets future Linux central
         └── sensors/
             ├── mod.rs     # Sensor module root
             └── bmp388.rs  # BMP388 pressure/temperature driver
@@ -143,38 +149,80 @@ The remaining weather-station wiring (anemometer/rain-gauge pulse inputs, wind-v
 and battery ADC) is documented in `datasheets/esp32_h2_devkitm.md` but not yet in
 firmware.
 
-### BLE (dropped on the ESP32-H2 port — historical)
+### BLE — on-chip ESP32-H2 peripheral
 
-> The external RN4871 module and its USART/firmware path were **removed** in the
-> ESP32-H2 port; the H2 has on-chip BLE 5.3 (to be brought up later via
-> esp-radio/trouble). The notes below describe the old STM32+RN4871 soak setup and
-> the `meteo-lib` RN4871 parser (still present, host-tested). They are kept for the
-> hard-won methodology lessons and the eventual on-chip BLE work.
+The firmware brings up the on-chip BLE 5.3 radio via **esp-radio** and
+**trouble-host**, advertises as `MeteoStation` (connectable undirected, static
+random address `F0:CA:FE:00:00:01`), and pushes a 17-byte telemetry frame at 1 Hz
+over a GATT Notify characteristic.
 
-The RN4871 BLE link is brought up by `ble::ble_task` (firmware) as device
-`80:1F:12:B6:60:BF`, module firmware v1.30, advertising continuously with no
-GATT services. The link is **unproven** — prior attempts never held a connection
-for the 6-minute target, and the root cause was never found. The live soak is the
-**acceptance gate**, not the host unit tests (which only prove the parser).
+**GATT layout:**
 
-Acceptance harness: `scripts/ble_soak.sh`, run **on gaia** (BlueZ 5.86). Deploy
-and run:
+| Role           | UUID                                   |
+| -------------- | -------------------------------------- |
+| Service        | `7e700001-b1df-42a1-bb5f-6a1028c793b0` |
+| Characteristic | `7e700002-b1df-42a1-bb5f-6a1028c793b0` |
+| Properties     | Read + Notify                          |
+
+The characteristic value is a 17-byte frame: byte[0] is the version sentinel
+(`0x01`), followed by encoded sensor data. Frame encoding and decoding live in
+`meteo-lib::ble::frame` (`Telemetry`, `encode`, `decode`, `FrameError`). The
+`decode()` path is built for a future Linux central; it is not used by the firmware
+itself.
+
+**Implementation notes:**
+
+- The GATT server is built manually via trouble-host's `AttributeTable` /
+  `AttributeServer` / `Characteristic` primitives. The `derive` macros
+  (`trouble-host-macros 0.4`) are absent from the crates.io registry used by this
+  workspace, so the table is constructed by hand.
+- `esp_sync::RawMutex` is used for the attribute table mutex. trouble-host 0.6
+  depends on `embassy-sync 0.7`; the workspace targets `embassy-sync 0.8`.
+  `esp_sync::RawMutex` implements `RawMutex` for both versions, bridging the two.
+- An RWDT heartbeat supervisor (`crates/meteo-firmware/src/watchdog.rs`) watches
+  `ADV_BEAT` (bumped each advertise-loop iteration) and `BLE_BEAT` (bumped each
+  successful notify). If either counter stalls, the RWDT fires and resets the chip.
+
+**Wire frame (`meteo-lib::ble::frame`):**
+
+Host-tested (24/24 tests). The `encode`/`decode` round-trip is verified on the
+development machine via `cargo nextest`. The firmware calls only `encode`; `decode`
+is present for the deferred Linux central.
+
+**Acceptance gate:**
+
+On-device acceptance requires `gaia` (BlueZ 5.86). Two scripts cover the two halves:
 
 ```bash
+# Link-stability soak (connect → hold 6 min → disconnect → gap → reconnect …)
 scp scripts/ble_soak.sh gaia:
 ssh gaia ./ble_soak.sh        # Ctrl-C to stop
+
+# Data-flow check (subscribe to notify, assert ≥5 well-formed frames in 15 s)
+scp scripts/ble_notify_check.sh gaia:
+ssh gaia ./ble_notify_check.sh
 ```
 
-It drives connect → hold 6 min → disconnect → 90 s gap → reconnect, indefinitely,
-printing one `PASS (held 360s)` line per cycle and exiting non-zero on any
-mid-window drop or failed reconnect. A single passing cycle is **not** acceptance —
-the link must hold and repeat over a sustained run.
+`ble_soak.sh` prints one `PASS (held 360s)` line per cycle and exits non-zero on
+any mid-window drop or failed reconnect. A single passing cycle is **not**
+acceptance — the link must hold and repeat over a sustained run.
 
-Two methodology traps to avoid (learned the hard way):
+`ble_notify_check.sh` connects, then subscribes via BlueZ **`AcquireNotify`** (a
+python-dbus reader), captures frames for `WINDOW_SECS` (default 15 s), and asserts
+at least `MIN_FRAMES` (default 5) 17-byte frames with byte[0] == 0x01. It uses
+`AcquireNotify` — **not** bluetoothctl's `notify on` output — because BlueZ only
+re-emits the `Value` property when it _changes_, and the near-constant telemetry
+gets deduped to silence even while notifications flow on-air; `AcquireNotify`
+delivers every PDU raw. Needs `python3` + `python-dbus` on gaia (`bleak` is not
+installed; `btmon` would also work but needs root). If the device is not already in
+blueman's cache the script does one bounded, self-terminating `--timeout` discovery
+(verified to leave the adapter idle, not wedged). Both env knobs are overridable.
+
+**Methodology traps (learned the hard way — do not bypass):**
 
 - **Never** run a blocking scan (`timeout … btmgmt find`, `bluetoothctl scan on`)
-  to find the device — it wedges the adapter in `Discovering: yes`. The script
-  connects by address off blueman's standing discovery cache instead.
+  to find the device — it wedges the adapter in `Discovering: yes`. Both scripts
+  connect by address off blueman's standing discovery cache instead.
 - Query link state via `busctl` (`org.bluez.Device1.Connected`) or the BlueZ
   cache, **never** a second scan.
 
