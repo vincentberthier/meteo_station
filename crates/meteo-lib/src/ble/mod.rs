@@ -1,2 +1,3 @@
-//! BLE module: minimal RN4871 link driver (no GATT, no services).
-pub mod rn4871;
+//! BLE telemetry support: the self-describing wire frame pushed over the
+//! on-chip BLE Notify characteristic. (The RN4871 external-module parser was
+//! removed in the ESP32-H2 port — on-chip BLE replaces it.)
