@@ -74,14 +74,28 @@ const ADV_REFRESH: Duration = Duration::from_secs(4);
 //   1  primary-service attribute
 //   2  telemetry characteristic (declaration + value)
 //   1  CCCD descriptor          (for Notify)
+// DIS (Device Information Service):
+//   1  primary-service attribute
+//   2  firmware-revision characteristic (declaration + value)
 // ───────────────────────────────────
-// 10  total
+// 13  total
 //
 // CCCD_MAX: one CCCD slot per notifiable characteristic per connection = 1.
 // CONN_MAX: matches CONNECTIONS_MAX = 1.
 // ---------------------------------------------------------------------------
-const ATT_MAX: usize = 10;
+const ATT_MAX: usize = 13;
 const CCCD_MAX: usize = 1;
+
+/// Standard Device Information Service (0x180A) and Firmware Revision String
+/// (0x2A26), expanded against the Bluetooth base UUID by `Uuid::new_short`.
+const DIS_UUID: Uuid = Uuid::new_short(0x180A);
+const FW_REV_UUID: Uuid = Uuid::new_short(0x2A26);
+
+/// Firmware version string surfaced over DIS. Sourced from the crate version
+/// (workspace 0.1.0). The DIS Firmware Revision String is a UTF-8 string with
+/// no NUL terminator; `add_characteristic_ro` stores the `&'static str` bytes
+/// directly (see step 3), so no length const or backing buffer is needed.
+const FW_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Telemetry service UUID: 7e700001-b1df-42a1-bb5f-6a1028c793b0
 ///
@@ -169,6 +183,17 @@ pub async fn run(controller: Controller) {
         svc.build();
         ch
     };
+
+    // Device Information Service: a single read-only Firmware Revision String the
+    // central reads once on connect to show the device firmware version. The value
+    // is the 'static FW_VERSION str, stored as ReadOnlyData — no backing buffer.
+    {
+        let mut dis = table.add_service(Service::new(DIS_UUID));
+        // The CharacteristicBuilder is dropped at the `;`, releasing its mutable
+        // borrow on `dis`, so the following `dis.build()` compiles.
+        dis.add_characteristic_ro(FW_REV_UUID, FW_VERSION).build();
+        dis.build();
+    }
 
     // Wrap the table in an AttributeServer.
     let server: MeteoServer<'_> = AttributeServer::new(table);
