@@ -2,7 +2,7 @@
 
 - **Source:** '1 (`.claude/brainstorm/1-ble-module-design.md`)
 - **Date:** 2026-06-16
-- **Status:** Planned
+- **Status:** Done (firmware/host substeps 1–6 implemented & build-gated 2026-06-16; on-device gaia acceptance pending — see Notes)
 
 ## Summary
 
@@ -786,16 +786,81 @@ docs: no build impact.
 
 Progress tracking (checked during implementation):
 
-- [ ] 1. Remove vestigial RN4871 driver
-- [ ] 2. Telemetry wire frame v1 (`meteo-lib`) + host tests
-- [ ] 3. BLE stack bring-up — advertising only
-  - [ ] 3a. Deps resolve (record: crates.io-only ☐ / `[patch]` required ☐)
-- [ ] 4. GATT telemetry service + 1 Hz Notify
-- [ ] 5. RWDT heartbeat supervisor
-- [ ] 6. Acceptance tooling + docs
-  - [ ] 6a. `ble_soak.sh` address
-  - [ ] 6b. `ble_notify_check.sh`
-  - [ ] 6c. `CLAUDE.md` on-chip rewrite
-- [ ] Wedge-recovery manual confirmation (stalled task → reset ≤8 s)
-- [ ] gaia acceptance: `ble_soak.sh` 6-min hold + reconnect, repeated
-- [ ] gaia acceptance: `ble_notify_check.sh` frames flow
+- [x] 1. Remove vestigial RN4871 driver — deleted rn4871.rs (1053 lines) + reduced ble/mod.rs to doc comment; lib.rs had no rn4871 re-export; host build/test/clippy/fmt clean
+- [x] 2. Telemetry wire frame v1 (`meteo-lib`) + host tests — 17-byte v1 frame (encode/decode/sentinels, lux mantissa+exp), 12 tests incl. 2 proptests; 24/24 host tests pass; clippy/fmt clean; firmware still builds; proptest-regressions seed checked in
+- [x] 3. BLE stack bring-up — advertising only — esp-radio+trouble-host wired in; heap allocator, concrete `Controller` alias, thin `ble_task`, static addr F0:CA:FE:00:00:01, connectable advertising + re-advertise on disconnect, `ADV_BEAT`; build+clippy clean (on-device gaia connect/reconnect = pending manual gate)
+  - [x] 3a. Deps resolve (record: crates.io-only ☑ / `[patch]` required ☐) — NO patch needed; trouble-host 0.6 also needs explicit `"peripheral"` feature (beyond `default-packet-pool-mtu-255`); `ExternalController` via `trouble_host::prelude`
+- [x] 4. GATT telemetry service + 1 Hz Notify — one 128-bit service (7e700001) + Read/Notify char (7e700002, [u8;17]); latest-wins `TELEMETRY` signal, bmp.rs publishes `from_bmp388`, notify loop encodes+notifies; service UUID in advert; re-advertise on disconnect. DEVIATION: trouble-host 0.6 `derive` macros need `trouble-host-macros 0.4` (absent from registry) → built GATT server MANUALLY via AttributeTable/AttributeServer; added `esp-sync` for `RawMutex` bridging embassy-sync 0.7↔0.8, + trouble-host `"gatt"` feature. build+clippy+fmt clean, 24/24 host tests (on-device notify-check = pending manual gate)
+- [x] 5. RWDT heartbeat supervisor — watchdog.rs: `BMP_BEAT`/`BLE_BEAT` statics + `supervise(rtc)` task; RWDT Stage0 8 s timeout, `RwdtStageAction::ResetSystem` (full-chip), 2 s poll; feeds only when `sampler_alive && (adv-changed || ble-changed)` so idle-but-advertising never false-resets; bmp.rs bumps BMP_BEAT on read, ble.rs bumps BLE_BEAT on notify; build+clippy+fmt clean (wedge-recovery = pending manual gate)
+- [x] 6. Acceptance tooling + docs — both scripts ShellCheck + `bash -n` clean; CLAUDE.md re-grounded on on-chip model (non-BLE content preserved)
+  - [x] 6a. `ble_soak.sh` address — DEVICE default → F0:CA:FE:00:00:01; RN4871 comments de-staled
+  - [x] 6b. `ble_notify_check.sh` — new gaia notify-flow check (no-scan connect-by-address, bluetoothctl GATT notify, asserts ≥5 17-byte frames w/ byte0==0x01). CAVEAT: the `Value:`-line parser assumes hex on the same line as `Value:`; BlueZ 5.86 bluetoothctl typically prints hex on a continuation line (and 17 bytes wrap 16+1) — this is the first thing to TUNE during the on-device gaia run (untestable here; plan flagged "fiddly on 5.86"). bleak fallback documented, not hard-depended.
+  - [x] 6c. `CLAUDE.md` on-chip rewrite — live design, GATT table, manual-AttributeTable + esp-sync notes, frame docs, methodology traps kept, module map updated
+
+### On-device bring-up (gaia, ESP32-H2 on /dev/ttyACM0) — 2026-06-16
+
+Flashed via `espflash --port /dev/ttyACM0`. On-device testing found **two runtime
+bugs the host build/clippy/fmt gate could not catch** (fixed in `fix(ble): …`):
+
+1. **Boot panic — AD overflow.** Flags + name + 128-bit ServiceUuids128 = 35 B >
+   31 B legacy adv limit → `encode_slice` Err → `.expect` panic → boot loop. Fixed
+   by moving the service UUID to the scan response.
+2. **RWDT false-reset of idle device.** `advertiser.accept()` blocks until a
+   central connects, so `ADV_BEAT` froze, `ble_alive=false`, feed withheld → reset
+   at 8 s (the exact risk #4 case; the plan's premise that the adv loop iterates
+   continuously was wrong). Fixed by bounding `accept()` with a 1 s re-advertise
+   refresh so `ADV_BEAT` keeps ticking while idle.
+
+**Verified on hardware (defmt):** boots without panic; advertises as `MeteoStation`
+(beat increments ~1 Hz); BMP388 samples ~26.3 °C / ~1013.6 hPa at 1 Hz; `rwdt fed`
+steadily every 2 s (bmp & adv both advancing) with **zero withholds and no reset**
+across a sustained idle-no-central run (>14 s, well past the 8 s RWDT window).
+
+A fourth on-device bug was found here too: the static-random **address byte order**
+was reversed — the device advertised as `01:00:00:FE:CA:F0` (invalid static-random,
+MSB top-bits 00) instead of the documented `F0:CA:FE:00:00:01`. Fixed by storing the
+address LSB-first (see the `fix(ble)` changeset).
+
+And the notify-check's **bluetoothctl-`notify on` approach was fundamentally broken**:
+BlueZ only re-emits the `Value` property on _change_, so the near-constant telemetry
+deduped to silence. Rewrote `ble_notify_check.sh` to use BlueZ `AcquireNotify` (raw,
+un-deduped notification socket via python-dbus). Confirmed end-to-end: a captured
+frame `01 3f0a 9827 ffff 0080 ffff 00 ffff ffff ff` decodes to v1 / 26.23 °C /
+1013.6 hPa (matching the live BMP388) with all six unimplemented fields as sentinels.
+
+- [x] Idle-no-central does NOT false-reset (was risk #4) — confirmed on hardware.
+- [x] gaia acceptance: `ble_notify_check.sh` frames flow — **PASS** (8 valid 17-byte
+      frames, 0 malformed; notify path proven end-to-end). NOTE: that window happened
+      to fit inside the ~10 s link lifetime — see the soak failure below.
+- [x] Wedge-recovery (stalled task → reset ≤8 s) — **PASS** on hardware. Temporarily
+      froze `BMP_BEAT` after 5 samples: supervisor logged `rwdt withheld —
+  sampler_alive=false`, RWDT reset the chip ~8 s after the last feed (USB-JTAG
+      re-enumerated). Temp stall reverted; not committed.
+- [ ] gaia acceptance: `ble_soak.sh` 6-min hold + reconnect — **FAIL (risk #7
+      reproduced); root-caused to the BLE controller's receive timing, NOT yet
+      fixed.** The link drops with `reason="Connection Timeout"` (supervision) at a
+      VARIABLE interval (~10 s–200 s). Diagnosis via btmon (capability-granted, no
+      `doas`) + a python-dbus `AcquireNotify` timing probe: - The H2 **transmits notifications perfectly at 1 Hz right up to the drop**
+      (btmon shows handle-17 ATT notifications steady, zero gaps; the probe saw 29
+      frames/30 s, max gap 1.12 s). So the firmware/executor is NOT stalling and
+      the H2 TX path is fine. - The H2's controller reports the supervision timeout → the **H2 intermittently
+      stops _hearing_ the central** (misses RX windows) while still transmitting. - btmon negotiated params: interval 45 ms, supervision **420 ms** (BlueZ kernel
+      default; gaia's `ConnectionSupervisionTimeout` is commented out). 420 ms is
+      short, but **other BLE devices hold a link to gaia fine at the same 420 ms**
+      — so this is a DEVICE defect, not a gaia-config problem. (Editing gaia's
+      kernel params is a per-host workaround, explicitly rejected.)
+      Ruled out: app/logging stall (steady 1 Hz proves the executor runs);
+      `DEFMT_LOG=trace` volume (lowered it — still drops); the central.
+      Leading hypothesis: the H2 BLE controller misses receive windows — classic
+      **sleep-clock drift** (ESP32-H2-DevKitM-1 has no external 32.768 kHz crystal;
+      modem-sleep then uses the imprecise internal RC) or RF contention (gaia has a
+      second device flooding its adapter ~90 pkt/s). **esp-radio 0.18 exposes NO BLE
+      sleep/clock-source config** (only 5 WiFi/event build options), so the fix is
+      not reachable from this firmware/stack version. Next: research esp-radio H2 BLE
+      connection-stability / LP-clock options (newer esp-radio?), confirm the DevKit's
+      32 kHz crystal situation, and/or test against a second clean central to fully
+      isolate gaia's RF environment. The peripheral now also requests an 8 s
+      supervision via `update_connection_params` (committed) — correct in principle
+      but BlueZ-on-gaia ignores it, and it would only mask the real RX-miss defect.
+      The `ble_soak.sh` harness itself works (applies conn params, connects, holds,
+      detects the drop, fails loud) and now self-populates the BlueZ cache.
