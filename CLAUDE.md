@@ -203,6 +203,20 @@ itself.
   dropped: the clock was disproven as the drop cause (the C6 ships the identical
   no-op `ble_rtc_clk_init` and `sleep_en: 0` means the LP clock does not gate
   connection-event timing).
+- **TODO — drop the vendored patch and upstream the fix (blocked on bt-hci).**
+  We are pinned to **trouble-host 0.6** because esp-radio `1.0.0-beta.0` (the latest,
+  including esp-hal `main`) pins **bt-hci 0.8**, while **trouble-host 0.7 requires
+  bt-hci 0.9** — the two `Controller` trait versions are incompatible and nothing
+  bridges them (esp-radio implements only the 0.8 trait). When esp-radio adopts
+  bt-hci 0.9, bump to trouble-host 0.7 and **delete the vendored copy +
+  `[patch.crates-io]`**. At that point also upstream the work: (a) an esp-rs/esp-hal
+  issue for the controller bug (HCI `LE Connection Update` accepted with Command
+  Status = success but no `LE Connection Update Complete` ever emitted as a
+  peripheral), and (b) an embassy-rs/trouble PR — _not_ our blanket force-L2CAP
+  (it would regress controllers where the LL procedure works), but an additive
+  opt-in (e.g. a `ForceL2cap` method/param), since the completion is delivered to
+  the connection's public event stream and can't be cleanly awaited inside
+  `update_connection_params`. Forks for both are at `../esp-hal` and `../trouble`.
 
 **Wire frame (`meteo-lib::ble::frame`):**
 
