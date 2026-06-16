@@ -145,6 +145,12 @@ impl Series {
     /// Default capacity: 600 points = 10 min at the 1 Hz feed.
     pub const DEFAULT_CAP: usize = 600;
 
+    /// Visible chart window, in seconds. The x-axis is right-anchored at the
+    /// latest sample and spans this many seconds backwards, so new points enter
+    /// at the right edge and scroll left as the window fills. Matched to
+    /// [`Series::DEFAULT_CAP`] at the 1 Hz feed (600 points ≈ 600 s).
+    pub const WINDOW_SECS: f64 = 600.0;
+
     /// Create a new `Series` with the given capacity.
     #[must_use]
     pub fn new(cap: usize) -> Self {
@@ -187,6 +193,47 @@ impl Series {
     pub fn x_bounds(&self) -> Option<(f64, f64)> {
         Some((self.points.front()?.0, self.points.back()?.0))
     }
+
+    /// Right-anchored x-axis window `[lo, hi]` for charting: `hi` is the latest
+    /// sample's timestamp (so the newest point sits at the right edge) and `lo`
+    /// is `hi - WINDOW_SECS`. Points older than the window scroll off the left.
+    /// Shaped as `[f64; 2]` to feed ratatui's `Axis::bounds` directly. `None` if
+    /// empty.
+    #[must_use]
+    pub fn x_window(&self) -> Option<[f64; 2]> {
+        let hi = self.points.back()?.0;
+        Some([hi - Self::WINDOW_SECS, hi])
+    }
+}
+
+/// Pad a value range so the chart line never sits flush against the axis, and a
+/// degenerate (single-point or flat) series stays visible.
+///
+/// For a zero-width range (`min == max`) the bounds open to `±1.0`; otherwise a
+/// 5 % margin is added on each side. Returns `[lo, hi]` (with `lo < hi`), shaped
+/// to feed ratatui's `Axis::bounds` directly.
+#[must_use]
+pub fn padded_value_bounds(min: f64, max: f64) -> [f64; 2] {
+    let span = max - min;
+    if span.abs() < f64::EPSILON {
+        [min - 1.0, max + 1.0]
+    } else {
+        let margin = span * 0.05;
+        [min - margin, max + margin]
+    }
+}
+
+/// Three evenly spaced tick labels for a value axis spanning `bounds` (`[lo, hi]`),
+/// each formatted to `prec` decimals (bottom, middle, top).
+#[must_use]
+pub fn value_axis_labels(bounds: [f64; 2], prec: usize) -> [String; 3] {
+    let [lo, hi] = bounds;
+    let mid = f64::midpoint(lo, hi);
+    [
+        format!("{lo:.prec$}"),
+        format!("{mid:.prec$}"),
+        format!("{hi:.prec$}"),
+    ]
 }
 
 /// Decode the DIS Firmware Revision String.
@@ -398,6 +445,79 @@ mod tests {
         assert_eq!(s.x_bounds(), Some((0.0, 2.0)));
         // y_bounds: min=5.0, max=15.0
         assert_eq!(s.y_bounds(), Some((5.0, 15.0)));
+        Ok(())
+    }
+
+    #[test]
+    fn x_window_right_anchors_on_latest() -> TestResult {
+        // Given
+        let mut s = Series::new(Series::DEFAULT_CAP);
+        s.push(10.0, 1.0);
+        s.push(42.0, 2.0);
+
+        // When
+        let [lo, hi] = s.x_window().ok_or("non-empty series has a window")?;
+
+        // Then — hi is the latest timestamp; the window spans WINDOW_SECS back.
+        assert!(
+            (hi - 42.0).abs() < f64::EPSILON,
+            "window hi should be the latest sample time"
+        );
+        assert!(
+            (hi - lo - Series::WINDOW_SECS).abs() < f64::EPSILON,
+            "window width should equal WINDOW_SECS"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn x_window_empty_is_none() -> TestResult {
+        // Given
+        let s = Series::new(Series::DEFAULT_CAP);
+
+        // When / Then
+        assert_eq!(s.x_window(), None);
+        Ok(())
+    }
+
+    // --- axis-helper tests ---
+
+    #[test]
+    fn padded_value_bounds_equal_expands() -> TestResult {
+        // Given a degenerate (single-value) range
+        // When
+        let [lo, hi] = padded_value_bounds(5.0, 5.0);
+
+        // Then — opens to ±1 so the flat line stays visible
+        assert!(lo < 5.0, "lo should drop below the value");
+        assert!(hi > 5.0, "hi should rise above the value");
+        assert!((lo - 4.0).abs() < f64::EPSILON);
+        assert!((hi - 6.0).abs() < f64::EPSILON);
+        Ok(())
+    }
+
+    #[test]
+    fn padded_value_bounds_range_adds_margin() -> TestResult {
+        // Given a non-degenerate range
+        // When
+        let [lo, hi] = padded_value_bounds(0.0, 10.0);
+
+        // Then — 5 % margin each side
+        assert!((lo - -0.5).abs() < f64::EPSILON, "lo should be -0.5");
+        assert!((hi - 10.5).abs() < f64::EPSILON, "hi should be 10.5");
+        Ok(())
+    }
+
+    #[test]
+    fn value_axis_labels_formats_min_mid_max() -> TestResult {
+        // Given / When
+        let labels = value_axis_labels([0.0, 10.0], 1);
+
+        // Then
+        assert_eq!(
+            labels,
+            ["0.0".to_owned(), "5.0".to_owned(), "10.0".to_owned()]
+        );
         Ok(())
     }
 

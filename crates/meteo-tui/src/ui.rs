@@ -9,7 +9,10 @@ use std::time::Instant;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph, Row, Table};
+use ratatui::symbols::Marker;
+use ratatui::widgets::{
+    Axis, Block, Chart, Dataset, GraphType, LegendPosition, Paragraph, Row, Table,
+};
 
 use crate::app::{AppState, STALE_AFTER};
 use crate::model::{self, ConnState, Series};
@@ -92,29 +95,94 @@ fn render_table(frame: &mut Frame, area: Rect, app: &AppState, now: Instant) {
     frame.render_widget(table, area);
 }
 
+/// Static descriptors for one telemetry chart.
+struct ChartSpec {
+    /// Block border title (the metric name).
+    title: &'static str,
+    /// Unit, used as the y-axis title and the legend key (e.g. `"°C"`).
+    unit: &'static str,
+    /// Decimal precision for the y-axis tick labels.
+    prec: usize,
+    /// Plot-line colour.
+    color: Color,
+}
+
 /// Render the two time-series charts (temperature and pressure).
 fn render_charts(frame: &mut Frame, area: Rect, app: &mut AppState) {
     let [top, bottom] = Layout::vertical([Constraint::Ratio(1, 2); 2]).areas(area);
-    render_series_chart(frame, top, "Temperature (°C)", &mut app.temp);
-    render_series_chart(frame, bottom, "Pressure (hPa)", &mut app.pressure);
+    render_series_chart(
+        frame,
+        top,
+        &ChartSpec {
+            title: "Temperature",
+            unit: "°C",
+            prec: 1,
+            color: Color::LightRed,
+        },
+        &mut app.temp,
+    );
+    render_series_chart(
+        frame,
+        bottom,
+        &ChartSpec {
+            title: "Pressure",
+            unit: "hPa",
+            prec: 1,
+            color: Color::LightCyan,
+        },
+        &mut app.pressure,
+    );
 }
 
-/// Render a single line chart, or an "awaiting data" placeholder when the
-/// series has no points yet.
-fn render_series_chart(frame: &mut Frame, area: Rect, title: &str, series: &mut Series) {
-    let (Some(x_range), Some(y_range)) = (series.x_bounds(), series.y_bounds()) else {
+/// Render a single time-series line chart, or an "awaiting data" placeholder
+/// when the series has no points yet.
+///
+/// The x-axis is a right-anchored [`Series::WINDOW_SECS`] window: the newest
+/// sample sits at the right edge and older samples scroll left, so the chart
+/// fills in from the right rather than stretching a few points across the full
+/// width. Both axes carry titles, tick labels, and a legend.
+fn render_series_chart(frame: &mut Frame, area: Rect, spec: &ChartSpec, series: &mut Series) {
+    let (Some(x_win), Some(y_raw)) = (series.x_window(), series.y_bounds()) else {
         frame.render_widget(
-            Paragraph::new("awaiting data").block(Block::bordered().title(title)),
+            Paragraph::new("awaiting data").block(Block::bordered().title(spec.title)),
             area,
         );
         return;
     };
+    // `x_win` and `y_win` are `[f64; 2]`, feeding `Axis::bounds` directly.
+    let y_win = model::padded_value_bounds(y_raw.0, y_raw.1);
+    let y_labels = model::value_axis_labels(y_win, spec.prec);
+
     let data = series.points();
-    let datasets = vec![Dataset::default().graph_type(GraphType::Line).data(data)];
+    let datasets = vec![
+        Dataset::default()
+            .name(spec.unit)
+            .marker(Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::new().fg(spec.color))
+            .data(data),
+    ];
+
+    let axis_style = Style::new().fg(Color::DarkGray);
     let chart = Chart::new(datasets)
-        .block(Block::bordered().title(title))
-        .x_axis(Axis::default().bounds([x_range.0, x_range.1]))
-        .y_axis(Axis::default().bounds([y_range.0, y_range.1]));
+        .block(Block::bordered().title(spec.title))
+        .legend_position(Some(LegendPosition::TopRight))
+        .x_axis(
+            Axis::default()
+                .title("time")
+                .style(axis_style)
+                .bounds(x_win)
+                // Fixed right-anchored window (Series::WINDOW_SECS = 600 s),
+                // oldest → newest.
+                .labels(["-10m", "-5m", "now"]),
+        )
+        .y_axis(
+            Axis::default()
+                .title(spec.unit)
+                .style(axis_style)
+                .bounds(y_win)
+                .labels(y_labels),
+        );
     frame.render_widget(chart, area);
 }
 
@@ -169,6 +237,12 @@ mod tests {
         assert!(
             buffer_text.contains("app v"),
             "buffer should contain 'app v'; got: {buffer_text:?}"
+        );
+        // Chart-exclusive content: the x-axis title proves the labelled chart
+        // rendered (the telemetry table has no "time" cell).
+        assert!(
+            buffer_text.contains("time"),
+            "buffer should contain the chart x-axis title 'time'; got: {buffer_text:?}"
         );
 
         Ok(())
