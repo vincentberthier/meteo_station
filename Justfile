@@ -48,7 +48,7 @@ reset:
 format:
     cargo fmt -- --emit=files
 
-# meteo-firmware is no_std/thumbv7em; meteo-lib is hardware-agnostic and lints on
+# meteo-firmware is no_std/riscv32imac; meteo-lib is hardware-agnostic and lints on
 # the host target, where its tests run. Linting on separate targets avoids trying
 # to build host code for the embedded target (or vice versa).
 [doc('Check code with clippy')]
