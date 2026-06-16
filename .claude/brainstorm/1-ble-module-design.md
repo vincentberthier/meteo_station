@@ -1,106 +1,121 @@
-# Brainstorm: BLE Module Design (RN4871)
+# Brainstorm: BLE Telemetry Design (ESP32-H2 on-chip)
 
 - **ID:** 1
 - **Category:** Architecture
-- **Date:** 2026-06-14
+- **Date:** 2026-06-14 (revised 2026-06-16 for the ESP32-H2 port)
 - **Status:** Active
 
 ## Context
 
-Third attempt at designing the BLE link for the weather station. An app must be
-able to read the sensor values (and more) the device reports. Sampling is 1 Hz,
-so the link has no throughput pressure. The device should **only push** data (or
-answer queries — the direction doesn't matter), must be **always advertising
-when not connected**, and must run **unattended for hours-to-days with no way to
-trigger an external reset**. `meteo-tui` is a throwaway proof-of-concept consumer
-and may be reworked freely.
+Design of the BLE telemetry link for the weather station. An app must be able to
+read the sensor values (and more) the device reports. Sampling is 1 Hz, so the
+link has no throughput pressure. The device should **only push** data (or answer
+queries — direction doesn't matter), must be **always advertising when not
+connected**, and must run **unattended for hours-to-days with no way to trigger
+an external reset**.
 
-Design was driven by current research (btleplug, RN4871 user guide + forums,
-embedded-Rust BLE ecosystem), **not** by prior attempts — which were explicitly
-out of scope and not consulted. Everything below refers only to the current
-(post-purge) changeset.
+> **Revision note (2026-06-16) — STM32 → ESP32-H2 port.** This brainstorm was
+> originally written as an _external-module_ design: an STM32H753ZI host driving a
+> **RN4871** BLE module over USART2, with an `RST_N` GPIO wedge-watchdog. The
+> firmware has since been ported to the **ESP32-H2-DevKitM-1**, whose **BLE 5.3 LE
+> radio is on-chip**. That single hardware change deletes the entire external-module
+> layer — RN4871, USART2, `RST_N`, the ASCII command driver, and the wedge
+> watchdog all disappear. The peripheral is now native on-chip BLE driven in Rust
+> via **esp-radio + trouble-host (TrouBLE)** on the existing esp-hal / esp-rtos /
+> embassy stack. The sections below are rewritten for that target. The
+> **data contract** (one custom service, one Notify characteristic, a
+> self-describing framed packet, the 8-value roster) carries over almost intact;
+> only the RN4871-specific 20-byte hard cap is relaxed (see Data Contract).
 
 ## Current State
 
-**Device side** (`crates/meteo-firmware`, STM32H753ZI + Embassy, `no_std`):
+**Device side** (`crates/meteo-firmware`, ESP32-H2 `riscv32imac`, `no_std`):
 
-- BMP388 sampled at 1 Hz over I2C1 (`bmp.rs`, forced mode).
-- LEDs (`leds.rs`).
-- `CLAUDE.md` reserves **USART2** (PD5 TX, PD6 RX, PD3 CTS, PD4 RTS) and a
-  **`RST_N` GPIO on PA4** for the RN4871. No BLE code currently exists.
+- BMP388 sampled over **I2C0** (SDA = GPIO10, SCL = GPIO11; `bmp.rs`).
+- Status LED on **GPIO8** (external LED + onboard WS2812 share the line; driven as
+  a plain GPIO, so the external LED blinks and the WS2812 stays dark).
+- esp-hal 1.1 + esp-rtos 0.3 (thread-mode executor + embassy time driver) +
+  embassy-executor/-time. `#[esp_rtos::main]` brings up the scheduler.
+- **No BLE code exists.** `main.rs` initialises the BMP388 task and the LED blink
+  loop and nothing else. Native BLE is the work this brainstorm scopes.
 
-**Consumer side** (`crates/meteo-tui`, tokio + ratatui):
+**`meteo-lib`** (hardware-agnostic, `embedded-hal-async` based):
 
-- Clean transport seam in `feed.rs`: it emits `ClientEvent::{Connected,
-Disconnected, Reading { index, raw }}` to the UI, but **no transport is
-  wired** — it idles until shutdown.
-- `sensors.rs` is a presentation registry (`SENSORS`: Temperature `°C`,
-  Pressure `hPa` via `pa_to_hpa`). The feed maps incoming readings onto registry
-  indices. Adding a sensor is one entry.
-- `app.rs` keeps rolling per-sensor history and connection status. Explicitly
-  disposable.
+- BMP388 driver, `utils`. Builds on host + target.
+- ⚠️ **Leftover from the RN4871 era:** `meteo-lib/src/ble/rn4871.rs` (1053 lines),
+  re-exported via `lib.rs` → `pub mod ble`, with host unit tests. It is the
+  RN4871 ASCII command/event parser — command-mode entry, `STA`/`SHW`,
+  `%CONNECT%`/`%DISCONNECT%` parsing. **None of it applies to the on-chip
+  trouble-host path.** It is not compiled into firmware, only host-tested. See
+  Findings → "BLE mess to clean up."
+
+**Consumer side:** the former `crates/meteo-tui` (a tokio + ratatui central using
+`bluer`) was **purged** in an earlier attempt and is not in the tree today. The
+central is re-included in scope (see Scope) and will be rebuilt.
 
 **Test host:** the dev machine has no Bluetooth radio. **gaia** does — controller
-`D8:F3:BC:63:2E:56`, powered, **BlueZ 5.86**, **Rust 1.93** — reachable over SSH
-(no password). Nothing on gaia is to be rebooted.
+`D8:F3:BC:63:2E:56`, powered, **BlueZ 5.86**, reachable over SSH (no password),
+running `blueman-manager` (standing discovery). gaia is the **current** acceptance
+test host. Nothing on gaia is to be rebooted.
 
 ## Findings
 
-### Topology — two halves
+### Topology — two halves (rewritten for on-chip BLE)
 
-1. **Peripheral:** STM32H753 host drives the **RN4871** over USART2 using its
-   ASCII command set (115200 8N1). The RN4871 owns the BLE stack/radio; the host
-   configures it, feeds it 1 Hz telemetry, and supervises it.
-2. **Central:** `meteo-tui` (or any app) is the BLE central, using **`bluer`**
-   (the official Linux-only BlueZ binding, tokio-based). It scans, connects,
-   discovers the GATT service, subscribes to the Notify characteristic, decodes
-   frames, and feeds the existing `ClientEvent` seam. Tested against gaia's
-   radio. `bluer` is chosen over `btleplug` because `meteo-tui` only ever runs
-   on Linux (so btleplug's cross-platform support buys nothing), and btleplug's
-   BlueZ backend has documented reliability bugs that hit this exact use case:
+1. **Peripheral:** the ESP32-H2 runs the BLE stack **itself** — no external
+   module. **esp-radio** provides the controller/driver (it enables BLE + 802.15.4
+   on the H2 and requires esp-hal's `unstable` feature, already on) and
+   **trouble-host (TrouBLE)** is the host-side GATT/GAP stack, the recommended
+   pairing with esp-radio and embassy. The firmware defines the GATT server,
+   advertises connectably, accepts a central, and pushes 1 Hz telemetry via
+   Notify. esp-rtos is the task scheduler (already in use).
+2. **Central:** a Linux app (revived `meteo-tui` or a fresh consumer) is the BLE
+   central, using **`bluer`** (the official Linux-only BlueZ binding, tokio-based).
+   It scans, connects, discovers the custom service, subscribes to the Notify
+   characteristic, decodes frames, and feeds the UI. Validated against gaia's
+   radio. `bluer` is chosen over `btleplug` because the consumer only ever runs on
+   Linux (btleplug's cross-platform support buys nothing) and btleplug's BlueZ
+   backend has documented reliability bugs for this exact use case:
    `adapter.events()` going silent on long runs (#332) and flaky
-   notifications/reconnect (#165). `bluer` is more complete and better-behaved
-   for a long-running, reconnect-heavy consumer.
+   notifications/reconnect (#165).
 
-### RN4871 robustness for an always-on, unattended peripheral
+### Robustness for an always-on, unattended on-chip peripheral
 
-- **Re-advertise (primary):** host watches the UART for `%DISCONNECT%` and
-  re-issues the `A` advertise command. Zero reboot latency.
-- **Reboot-after-disconnect (fallback):** feature bit `SR` 0x0080 makes the
-  module reboot (and thus re-advertise) on its own after a drop.
-- **Wedge recovery:** if the module stops emitting events / stops answering
-  commands, the host pulses **`RST_N` (PA4)** low, waits for `%REBOOT%`, and
-  reconfigures. This is the "no external reset needed" guarantee — the STM32 is
-  the supervisor.
-- **Firmware:** target **≥ v1.40** (earlier versions have Android
-  private-addressing bugs and command-mode-entry reboots; v1.28 is the practical
-  minimum). Check at bring-up with `V`.
-- **Config persistence:** `SR/SN/SS/...` set-commands need `WR` (or a reboot) to
-  survive power loss.
-- **Flow control:** HW CTS/RTS (`SR` 0x8000) is **not** required at 115200 for
-  1 Hz traffic; the CTS/RTS pins are wired and can be enabled later if RX
-  overruns ever appear.
-- **Single connection:** the RN4871 accepts one central; re-advertise after it
-  disconnects. Matches the chosen consumer model.
+The failure modes change completely versus the RN4871 design. There is **no
+external module to wedge and no `RST_N` line to pulse** — the radio is on-chip and
+managed by esp-radio inside the same firmware. The robustness mechanisms become:
 
-### Data contract — custom GATT, one framed Notify characteristic
+- **Always-connectable advertising:** the trouble-host GAP loop re-enters
+  advertising immediately whenever it is not connected (i.e. after every
+  disconnect). This replaces the RN4871 `STA,00A0,0000,00A0` + `%DISCONNECT%`
+  re-advertise dance — it is now just the peripheral's normal control flow.
+- **Firmware-hang recovery:** if the firmware itself hangs, the recovery is the
+  **ESP32-H2 RWDT (reset watchdog timer)** resetting the whole chip — not an
+  external reset pin. This is the new "no external reset needed" guarantee; the
+  chip is its own supervisor.
+- **No firmware-version gate, no UART flow control, no command-mode guards.** All
+  of that was RN4871 module plumbing and is gone. The relevant tuning knobs are
+  now BLE connection parameters (interval / supervision timeout / PHY), set by the
+  peripheral's preferred-connection-parameters and/or accepted from the central.
+- **Single connection** (one central at a time) still matches the consumer model;
+  re-advertise on disconnect.
+
+### Data contract — custom GATT, one framed Notify characteristic (carried over)
 
 The device exposes **one custom GATT service** with a **single Notify
 characteristic** carrying a **self-describing, extensible framed packet** of
-sensor readings. Decided over the alternatives:
+sensor readings. The rationale is unchanged by the port:
 
 - vs. one-characteristic-per-sensor: avoids GATT/handle churn every time a sensor
   is added; the central subscribes once.
-- vs. RN4871 Transparent UART pipe: gives real GATT structure and a stable,
-  documented contract instead of an opaque proprietary-UUID byte pipe.
+- The Notify push model fits "device only pushes" 1 Hz telemetry.
 
-On the firmware the characteristic is defined with `PS`/`PC` and updated with
-`SHW,<handle>,<hex>` (a local-characteristic write triggers the Notify). Each
-frame carries a sensor identifier + value so it maps directly onto the existing
-`ClientEvent::Reading { index, raw }` seam and the `SENSORS` registry.
+On trouble-host the characteristic is a server attribute; pushing a value is a
+`notify()` on it. Each frame carries a sensor identifier + value so it maps onto a
+clean consumer seam and a presentation registry on the central.
 
-**Values the frame carries** (the contract; per-sensor hardware/drivers are out
-of scope here):
+**Values the frame carries** (the contract; per-sensor hardware/drivers are out of
+scope here):
 
 1. Temperature (°C) — BMP388 / BME280
 2. Pressure (hPa) — BMP388 / BME280
@@ -111,17 +126,18 @@ of scope here):
 7. Wind direction — weather meter
 8. Battery level — ADC
 
-**Hard RN4871 constraint (verified):** a custom characteristic defined with `PC`
-is **capped at 20 bytes** (1–20 octets, explicit in the User Guide DS50002466).
-The module exposes **no ATT-MTU command**; its partial DLE (151 bytes, v1.28+)
-benefits only the built-in Transparent UART stream — it does **not** lift the
-20-byte cap on custom characteristics. So a single custom-characteristic
-notification carries **at most 20 bytes**, full stop.
+**MTU / size — the RN4871 hard cap is GONE.** The original design was forced into
+a tight 17-byte packet because a RN4871 custom characteristic was **hard-capped at
+20 bytes** with no MTU command. On the ESP32-H2 the ATT MTU is **negotiable** (BLE
+5.3, DLE), so a single notification can carry far more than 20 bytes when the
+central negotiates a larger MTU. The constraint is relaxed from a hard ceiling to a
+soft default: with no MTU negotiation the usable Notify payload is the default
+`ATT_MTU 23 − 3 = 20 bytes`, so a packet that fits 20 bytes still works
+everywhere with zero negotiation.
 
-**Frame encoding (RESOLVED — not deferred):** a naïve `1-byte id + 4-byte f32`
-per value would be ~40 bytes (≈ 2× the cap) and is rejected. Instead the frame is
-a **versioned, fixed-schema, scaled-integer packet sized to fit one 20-byte
-notification**:
+**Frame encoding (kept as the default, no longer forced):** the versioned,
+fixed-schema, scaled-integer packet still fits the 20-byte default and stays the
+recommended layout — it is compact, self-describing, and dependency-free:
 
 | Field          | Encoding                       | Bytes  |
 | -------------- | ------------------------------ | ------ |
@@ -136,96 +152,115 @@ notification**:
 | battery        | `u8` percent                   | 1      |
 | **total**      |                                | **17** |
 
-≈ 17 bytes — inside the 20-byte cap with ~3 bytes of headroom. **No
-fragmentation, no DLE dependency, no Transparent UART.** Self-description is at
-the frame level (the version byte); extend by bumping the schema version.
+≈ 17 bytes — inside the 20-byte default with headroom, and now also extensible
+_upward_ (negotiate a larger MTU) if the roster or precision grows, instead of
+being forced into fragmentation. The version byte lets the central detect and
+reject a schema it doesn't understand.
 
-**Ceiling (recorded risk):** the 20-byte cap is a real ceiling, and the current
-frame already uses ~17 of it. A materially larger roster or higher precision
-would exceed 20 bytes and force a transport change — either multiple
-characteristics, or switching this one characteristic to the Transparent UART
-stream (151 bytes with DLE). The version byte lets the central detect and reject
-a schema it doesn't understand if that day comes.
+### Direction & security (resolved, unchanged)
 
-### Direction & security (resolved)
-
-- **Push via Notify.** Notify beats periodic read for 1 Hz telemetry (half the
-  packets, lower latency, deterministic cadence) and is the natural "device only
-  pushes" model.
+- **Push via Notify.** Beats periodic read for 1 Hz telemetry (half the packets,
+  lower latency, deterministic cadence) and is the natural "device only pushes"
+  model.
 - **Open link, no pairing.** Weather telemetry isn't sensitive; skip
-  bonding/encryption for now to keep the PoC simple.
+  bonding/encryption for now to keep the design simple. (On the H2, native
+  pairing/bonding via trouble-host is available later if wanted.)
 
-### Hardware decision (resolved)
+### Hardware decision (resolved by the port)
 
-Stay with the **RN4871** — it is physically wired and in the pin map. Noted
-trade-off accepted: it has no maintained Rust driver (the firmware ASCII layer is
-ours to write) and documented firmware interop quirks.
+**On-chip BLE on the ESP32-H2 — settled.** The original brainstorm re-evaluated
+and _declined_ "nRF52840 as the sole MCU" (native on-chip BLE, deleting the whole
+external-module layer). It declined it for **one** reason: the planned sensor
+roster needed more peripherals and I/O than a small nRF board could host, so BLE
+was offloaded to the RN4871 to keep the STM32H7 as the sensor host.
 
-A switch to **nRF52840 as the sole MCU** (native BLE via `nrf-softdevice`,
-replacing the STM32H753 entirely) was explicitly re-evaluated and **declined**.
-It would be materially better _for the BLE goal_ — it deletes the entire
-ASCII-driver + UART-supervisor + `RST_N` wedge-watchdog layer in favour of a
-Bluetooth-qualified on-chip stack driven by the most production-proven Rust BLE
-library — and the cost is bounded (the `embedded-hal-async` sensor drivers and
-`meteo-tui` port unchanged; only `meteo-firmware`'s `embassy-stm32` →
-`embassy-nrf` init is rewritten; same `thumbv7em` target). It was declined
-because the planned sensor roster needs more peripherals and I/O than a small
-nRF52840 board can host — the STM32H753's peripheral and pin count is required,
-so offloading BLE to a dedicated module (the RN4871) and keeping the H7 as the
-sensor host is the right split. If the RN4871 path proves unstable again,
-nRF52840-as-sole-MCU remains the documented BLE fallback (at the cost of
-re-solving the sensor-I/O budget). Other alternatives
-(`STM32 + HCI controller + trouble-host`, ESP32 Rust BLE) were considered and
-set aside as less mature.
+The ESP32-H2 port **dissolves that exact trade-off.** It has on-chip BLE 5.3 _and_
+enough I/O for the full roster: 2× I2C, 2× UART, SPI, a 5-channel ADC, and 19
+GPIOs — the complete weather-station wiring (BMP388 I2C, anemometer/rain-gauge
+pulse inputs, wind-vane and battery ADC) already fits its pin map
+(`datasheets/esp32_h2_devkitm.md`). So the on-chip path the original brainstorm
+wanted but couldn't afford is now the chosen design, with no I/O penalty. The
+RN4871, USART2, and `RST_N` are retired hardware.
+
+### BLE mess to clean up (the leftovers from the port)
+
+The STM32+RN4871 era left artifacts that no longer belong:
+
+- **`meteo-lib/src/ble/rn4871.rs` (1053 lines) + its host tests + the `ble` module
+  re-export** — recommend **removing** them as part of this BLE rework. The driver
+  is RN4871-specific (ASCII command mode, `STA`/`SHW`, module status events) and
+  has no role in the trouble-host design; keeping it as host-tested dead code is
+  misleading. (Reversible from git history if ever needed.)
+- **`CLAUDE.md` still documents the RN4871 path** (USART2 wiring, `RST_N`, the
+  module-supervisor model, "RN4871 parser kept for host tests") and the gaia soak
+  framed around the module. Those notes should be updated to the on-chip model
+  once this design lands.
+- **Brainstorm 2 (`2-ble-link-soak-test.md`) is also RN4871-based** — its `STA`
+  advertising mechanism, `RST_N` wedge recovery, and module wiring are obsolete on
+  the H2. Its _soak-harness methodology_ (the gaia connect/hold/disconnect/
+  reconnect loop, the discovery-cache traps) stays valid and is the acceptance
+  gate here (see Scope). Updating B2 itself is out of scope for this revision.
 
 ## Scope
 
 **In scope**
 
-- A hardware-agnostic **RN4871 driver in `meteo-lib`** over `embedded-io-async`
-  UART traits: command/response handling, command-vs-data mode, status-event
-  parsing (`%CONNECT%`, `%DISCONNECT%`, `%REBOOT%`, `%STREAM_OPEN%`), one-time/
-  boot-time provisioning, custom GATT definition, and characteristic push.
-- A **firmware BLE task** wiring USART2 + `RST_N`, fed sensor readings from the
-  sampling task via an `embassy_sync` channel; owns advertising supervision,
-  disconnect re-advertise, and the `RST_N` wedge watchdog.
+- A **firmware BLE peripheral** on the ESP32-H2 using **esp-radio + trouble-host**:
+  GATT server with one custom service + one Notify characteristic, connectable
+  advertising that re-advertises on disconnect, and 1 Hz telemetry push. Fed sensor
+  readings from the sampling task via an `embassy_sync` channel. RWDT as the
+  firmware-hang backstop.
 - A **self-describing wire frame** carrying sensor id + value, extensible to the
-  future sensor set (BME280, MLX90614, VEML7700, weather meter, …).
-- A **central transport for `meteo-tui`** (btleplug or bluer) that scans,
-  connects, subscribes, decodes frames, drives `ClientEvent`, and reconnects on
-  disconnect — validated on gaia.
+  full sensor set (BMP388 today; BME280, MLX90614, VEML7700, weather meter, battery
+  later). Default = the 17-byte scaled-integer packet; MTU negotiable upward.
+- A **central transport** (revived `meteo-tui` or a fresh Linux consumer using
+  `bluer`) that scans, connects, discovers the service, subscribes, decodes frames,
+  drives the UI, and reconnects on disconnect — validated on gaia.
+- **Acceptance gate:** the **gaia BlueZ soak** (connect → hold 6 min → disconnect →
+  90 s gap → reconnect, self-validating, fail-loud), now exercising the on-chip
+  radio. gaia (BlueZ 5.86) is the current test host.
+- **Cleanup:** remove the vestigial RN4871 driver/tests from `meteo-lib`; update
+  `CLAUDE.md`'s BLE section to the on-chip model.
 
 **Out of scope**
 
 - Pairing/bonding/encryption, multi-central support, BLE throughput beyond 1 Hz.
-- Switching away from the RN4871 hardware.
-- Reading or reviving any prior BLE attempt.
 - The per-sensor **hardware bring-up and drivers** for the roster (the list of
   values the frame _carries_ is in scope — see the data contract — but acquiring
   them is separate work).
+- Reading or reviving any prior BLE _attempt_ beyond salvaging the gaia soak
+  methodology.
+- Updating brainstorm 2 (tracked separately).
+- 802.15.4 / Thread / Zigbee (the H2's other radio) — BLE only here.
 
 ## Open Questions
 
 Implementation-specific (for the planner). The data contract — characteristic
-topology, value roster, and the exact frame layout — is **resolved above**, not
-here.
+topology, value roster, default frame layout — is **resolved above**, not here.
 
-1. **Service & characteristic UUIDs** — pick the custom 128-bit UUIDs and the
-   `PC` property bitmap (Notify; `PC` size = 20 / `0x14`).
-2. **RN4871 driver internals** — async command/response parser, `$$$` / `---`
-   timing and guards (`SR` bits 0x4000 "No Prompt", 0x0008 "Command Mode Guard"),
-   status-event delimiter parsing, and how readings are serialized to `SHW`.
-3. **Provisioning model** — configure-on-every-boot vs one-time `WR` provisioning
-   plus a verify-and-repair check at startup; firmware-version gate via `V`.
-4. **Supervisor/watchdog state machine** — re-advertise on `%DISCONNECT%`,
-   timing for declaring the module wedged, `RST_N` pulse + recovery sequence.
-5. **Embassy task structure** — channel type/capacity between the sampling task
-   and the BLE task; behaviour when no central is connected (drop vs latest-wins).
-6. **Central reconnect** — `bluer` reconnect state machine (detect disconnect,
-   rescan, fresh device handle, rediscover, resubscribe); frame decode →
-   `SENSORS` index mapping. (Crate choice resolved: `bluer`.)
-7. **USART2 config** — confirm 115200 8N1, flow control initially off; Embassy
-   `Uart`/buffered-UART setup and the `RST_N` GPIO.
+1. **Service & characteristic UUIDs** — pick the custom 128-bit service/char UUIDs
+   and the characteristic properties (Notify; optional Read for last value).
+2. **esp-radio + trouble-host integration** — exact crate versions compatible with
+   esp-hal 1.1 / esp-rtos 0.3 / embassy-executor 0.10; controller init, BLE
+   feature flags on esp-radio, memory/heap allocation for the BLE stack, and how the
+   trouble-host runner is scheduled alongside the esp-rtos executor.
+3. **GATT server definition** — trouble-host's attribute-table / server macro
+   layout for the one service + Notify characteristic, and how a sample becomes a
+   `notify()`.
+4. **Advertising & connection parameters** — adv interval, connectable adv payload
+   (name + service UUID), preferred connection interval / supervision timeout / PHY
+   for a stable hold on a possibly-marginal link; re-advertise-on-disconnect control
+   flow.
+5. **Embassy task structure** — channel type/capacity between the sampling task and
+   the BLE task; behaviour when no central is connected (drop vs latest-wins).
+6. **RWDT configuration** — feeding cadence and timeout for the firmware-hang
+   backstop, and where the feed lives so a wedged BLE task actually trips it.
+7. **Central transport** — revive `meteo-tui` vs fresh consumer; `bluer` reconnect
+   state machine (detect disconnect, rescan, fresh device handle, rediscover,
+   resubscribe); frame decode → presentation mapping. (Crate choice resolved:
+   `bluer`.)
+8. **Frame schema versioning** — initial version byte value and the
+   forward/backward-compatibility rule the central applies on an unknown version.
 
 ## Next Steps
 
