@@ -55,10 +55,26 @@ format:
 clippy:
     cargo clippy -p meteo-firmware -- -D warnings
     cargo clippy -p meteo-lib --all-features --all-targets --target {{ host_target }} -- -D warnings
+    cargo clippy -p meteo-tui --all-targets --target {{ host_target }} -- -D warnings
 
 [doc('Run tests on host')]
 test:
     cargo nextest run -p meteo-lib --target {{ host_target }}
+    cargo nextest run -p meteo-tui --target {{ host_target }}
+
+# --- Dashboard recipes ---
+
+[doc('Build the TUI dashboard (host target)')]
+tui-build:
+    cargo build -p meteo-tui --target {{ host_target }}
+
+[doc('Run the TUI dashboard (host target)')]
+tui-run *ARGS:
+    cargo run -p meteo-tui --target {{ host_target }} -- {{ ARGS }}
+
+[doc('Clippy the TUI crate only (fast host-side loop)')]
+tui-clippy:
+    cargo clippy -p meteo-tui --all-targets --target {{ host_target }} -- -D warnings
 
 # Ignored advisories (unmaintained transitive deps) are documented in
 # .cargo/audit.toml; cargo-audit reads it automatically.

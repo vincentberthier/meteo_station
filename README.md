@@ -9,8 +9,9 @@ built on the [Embassy](https://embassy.dev) async runtime over esp-hal + esp-rto
 - `crates/meteo-firmware` — ESP32-H2 binary: esp-hal/esp-rtos init, GPIO8 status
   LED, Embassy tasks. esp deps are gated to `cfg(target_arch = "riscv32")`.
 - `crates/meteo-lib` — hardware-agnostic drivers (host-testable) using
-  `embedded-hal-async` traits: BMP388 barometer, plus an RN4871 BLE parser kept
-  for its host tests (not flashed; the H2 uses on-chip BLE, brought up later).
+  `embedded-hal-async` traits: BMP388 barometer, v1 BLE wire-frame encode/decode.
+- `crates/meteo-tui` — terminal dashboard (host, `x86_64-linux`): connects to the
+  station over BLE, decodes telemetry frames, and renders a live ratatui UI.
 
 ## Build & flash
 
@@ -18,13 +19,29 @@ built on the [Embassy](https://embassy.dev) async runtime over esp-hal + esp-rto
 just build     # release firmware (riscv32imac)
 just flash      # flash to device (espflash, over native USB-Serial-JTAG)
 just run        # flash + attach defmt monitor
-just clippy     # firmware (riscv) + meteo-lib (host), -D warnings
-just test       # host unit tests (cargo nextest, meteo-lib)
+just clippy     # firmware (riscv) + meteo-lib + meteo-tui (host), -D warnings
+just test       # host unit tests (cargo nextest, meteo-lib + meteo-tui)
 just format     # cargo fmt
 ```
 
 See `CLAUDE.md` for the pin allocation, datasheets, and the espflash logging
 procedure.
+
+## Live dashboard
+
+`just tui-run` launches the terminal dashboard. It connects to the `MeteoStation`
+BLE peripheral and renders live telemetry in the terminal.
+
+```bash
+just tui-build                      # build only
+just tui-run                        # connect to default address F0:CA:FE:00:00:01
+just tui-run -- --address AA:BB:CC:DD:EE:FF   # override station address
+```
+
+Press `q`, Esc, or Ctrl-C to quit.
+
+Host prerequisite: `bluetoothd` must be running at runtime; `libdbus-1-dev` is
+required at build time (provides the BlueZ D-Bus binding).
 
 ## BLE link soak test — `scripts/ble_soak.sh`
 

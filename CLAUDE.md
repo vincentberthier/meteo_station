@@ -31,17 +31,22 @@ just run
 # Reset the device
 just reset
 
-# Check code with clippy
+# Check code with clippy (firmware + meteo-lib + meteo-tui)
 just clippy
 
 # Format code
 just format
 
-# Run tests on host
+# Run tests on host (meteo-lib + meteo-tui)
 just test
 
 # Show binary size
 just size
+
+# Dashboard (host target only)
+just tui-build           # build the TUI dashboard
+just tui-run             # run the TUI dashboard
+just tui-clippy          # clippy the TUI crate only (fast loop)
 ```
 
 ### Flashing & logging with espflash
@@ -87,16 +92,19 @@ crates/
 │       ├── ble.rs         # On-chip BLE stack: controller, manual GATT server,
 │       │                  #   advertise loop, 1 Hz notify (esp-radio + trouble-host)
 │       └── watchdog.rs    # RWDT heartbeat supervisor (watches ADV_BEAT + BLE_BEAT)
-└── meteo-lib/             # Library crate: hardware-agnostic
+├── meteo-lib/             # Library crate: hardware-agnostic
+│   └── src/
+│       ├── lib.rs         # Re-exports sensor drivers and utilities
+│       ├── utils.rs       # Utility functions (trunc2, etc.)
+│       ├── ble/
+│       │   └── frame.rs   # v1 wire frame: Telemetry, encode/decode, FrameError,
+│       │                  #   sentinels; host-tested; decode() targets Linux central
+│       └── sensors/
+│           ├── mod.rs     # Sensor module root
+│           └── bmp388.rs  # BMP388 pressure/temperature driver
+└── meteo-tui/             # Binary crate: terminal dashboard (host, x86_64-linux)
     └── src/
-        ├── lib.rs         # Re-exports sensor drivers and utilities
-        ├── utils.rs       # Utility functions (trunc2, etc.)
-        ├── ble/
-        │   └── frame.rs   # v1 wire frame: Telemetry, encode/decode, FrameError,
-        │                  #   sentinels; host-tested; decode() targets future Linux central
-        └── sensors/
-            ├── mod.rs     # Sensor module root
-            └── bmp388.rs  # BMP388 pressure/temperature driver
+        └── main.rs        # ratatui TUI: BLE connect, telemetry subscribe, render
 ```
 
 **Library vs Binary separation:**
@@ -111,6 +119,56 @@ crates/
 Primary: ESP32-H2 (`riscv32imac-unknown-none-elf`), stable Rust (no `build-std`).
 esp-hal's build script emits the linker scripts, so `.cargo/config.toml` only sets
 the target, `force-frame-pointers` (for esp-backtrace), and the espflash runner.
+
+### Dashboard (`meteo-tui`)
+
+`crates/meteo-tui` is a host-only (`x86_64-unknown-linux-gnu`) `std` binary crate. It
+connects to the `MeteoStation` BLE peripheral via **bluer 0.17** (the official Rust
+BlueZ binding), subscribes to the telemetry notify characteristic, decodes each
+17-byte v1 frame via `meteo-lib::ble::frame::decode`, and renders a live terminal
+dashboard with ratatui:
+
+- All 8 frame fields (temperature, pressure, humidity, light, wind speed/direction,
+  rainfall, battery).
+- Live scrolling temperature and pressure mini-charts.
+- Header bar: wall clock, app version, firmware version (read from DIS), connection
+  status.
+
+**Host-only build — never build with `--workspace` on the default target.** The
+`.cargo/config.toml` default target is `riscv32imac-unknown-none-elf`; `meteo-tui`
+uses `std` and cannot compile for that target. All recipes scope the crate explicitly:
+
+```bash
+just tui-build           # cargo build -p meteo-tui --target x86_64-unknown-linux-gnu
+just tui-run [-- ARGS]   # cargo run   -p meteo-tui --target x86_64-unknown-linux-gnu
+just tui-clippy          # clippy for the dashboard only (fast iteration loop)
+```
+
+The dashboard crate is also included in `just clippy` and `just test`.
+
+**`bluer` / `AcquireNotify` rationale.** The dashboard uses `bluer`'s
+`Characteristic::notify_io()`, which is backed by BlueZ `AcquireNotify`. This
+delivers every notification PDU over a raw file descriptor without deduplication.
+`btleplug`'s BlueZ backend uses `StartNotify` and surfaces values through the
+`PropertiesChanged`/`Value` D-Bus property, which BlueZ only re-emits when the value
+_changes_. The telemetry payload is near-constant (sensor readings barely move
+second-to-second), so that path collapses notifications to silence — the same trap
+`scripts/ble_notify_check.sh` documents and avoids.
+
+**DIS firmware-version transport.** The firmware exposes a standard Device
+Information Service (`0x180A`) with a Firmware Revision String (`0x2A26`). The
+dashboard reads that characteristic once on connect and displays it in the header
+alongside the app version.
+
+**Disconnect detection.** Link state is authoritative: the dashboard treats a BlueZ
+`Connected` → false transition or an EOF on the notify fd as the disconnect signal.
+Frame age is cosmetic only (it drives value greying when frames stop arriving) and
+never triggers reconnection. On reconnect, the dashboard performs a fresh bounded
+scan first — BlueZ evicts the non-bonded LE device object after disconnect, so a
+cold `connect` by address would fail until the cache is repopulated.
+
+**Host prerequisites.** At build time: `libdbus-1-dev`. At runtime: a running
+`bluetoothd` (present on the dev machine / gaia).
 
 ## Hardware
 
