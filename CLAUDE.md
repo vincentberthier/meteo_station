@@ -11,7 +11,10 @@ Currently supports:
 > external RN4871 module (RN4871/USART path dropped). On-chip BLE telemetry is now
 > implemented: the firmware advertises as `MeteoStation`, exposes a GATT notify
 > characteristic, and pushes sensor data at 1 Hz, with an RWDT heartbeat supervisor.
-> On-device acceptance via the gaia soak harness is a pending manual gate.
+> The earlier supervision-timeout disconnects are fixed by negotiating an 8 s
+> supervision timeout over L2CAP (a vendored trouble-host patch — see the BLE
+> implementation notes). On-device acceptance via the gaia soak harness is a
+> pending manual gate.
 
 ## Build Commands
 
@@ -182,6 +185,24 @@ itself.
 - An RWDT heartbeat supervisor (`crates/meteo-firmware/src/watchdog.rs`) watches
   `ADV_BEAT` (bumped each advertise-loop iteration) and `BLE_BEAT` (bumped each
   successful notify). If either counter stalls, the RWDT fires and resets the chip.
+- **Supervision-timeout fix (vendored trouble-host patch).** BlueZ connects with a
+  ~420 ms supervision timeout, so the link dropped (`Connection Timeout`, HCI 0x08)
+  on any brief central-radio stall. On connect the firmware requests a robust 8 s
+  supervision timeout + 80 ms interval via `update_connection_params`, but the H2
+  controller accepts the HCI `LE Connection Update` (Command Status = success)
+  without ever running the LL connection-parameters-request procedure on air — so
+  the parameters never changed. The workspace vendors trouble-host 0.6.0 at
+  `third_party/trouble-host` (copied from the crates.io source) with a one-line change in
+  `update_connection_params` that restricts the HCI path to the central role; a
+  peripheral now uses the **L2CAP Connection Parameter Update** signaling, which the
+  controller forwards correctly. Wired via `[patch.crates-io]` in the workspace
+  `Cargo.toml`. Verified on-device: the `ConnectionParamsUpdated` log fires with
+  `supervision_ms=8000` and a 6-min hold held with zero drops (was 2–203 s before).
+- The esp-rs stack (esp-hal 1.1, esp-rtos 0.3, esp-radio `1.0.0-beta.0`) is pulled
+  from crates.io. An earlier local esp-hal fork that carried an LP-clock change was
+  dropped: the clock was disproven as the drop cause (the C6 ships the identical
+  no-op `ble_rtc_clk_init` and `sleep_en: 0` means the LP clock does not gate
+  connection-event timing).
 
 **Wire frame (`meteo-lib::ble::frame`):**
 

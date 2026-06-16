@@ -254,8 +254,14 @@ async fn advertise_loop(
         // Centrals (e.g. BlueZ) often connect with a ~420 ms supervision timeout,
         // which drops the link on any brief radio stall ("Connection Timeout").
         // As a peripheral, request a robust supervision timeout (8 s) + relaxed
-        // 80 ms interval — ample for 1 Hz telemetry. Best-effort: if the central
-        // rejects, the link simply keeps the central's params.
+        // 80 ms interval — ample for 1 Hz telemetry. On the ESP32-H2 this request
+        // only takes effect because the workspace vendors trouble-host with a patch
+        // that routes a peripheral's request over L2CAP signaling (the controller's
+        // HCI LE Connection Update path accepts the command but never runs the
+        // procedure on air); see the [patch.crates-io] note in the workspace
+        // Cargo.toml. Best-effort: if the central rejects, the link keeps the
+        // central's params. The applied values surface in the ConnectionParamsUpdated
+        // log below (supervision_ms=8000 on success).
         if let Err(e) = raw_conn
             .update_connection_params(stack, &RequestedConnParams::default())
             .await

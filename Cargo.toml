@@ -40,7 +40,7 @@ embassy-time = { version = "0.5", features = ["defmt-timestamp-uptime"] }
 esp-hal = { version = "1.1", features = ["esp32h2", "unstable", "defmt"] }
 esp-rtos = { version = "0.3", features = ["esp32h2", "embassy", "esp-alloc", "esp-radio"] }
 esp-println = { version = "0.17", features = ["esp32h2", "defmt-espflash"] }
-esp-radio = { version = "0.18", features = ["esp32h2", "ble", "unstable", "defmt"] }
+esp-radio = { version = "1.0.0-beta.0", features = ["esp32h2", "ble", "unstable", "defmt"] }
 esp-alloc = "0.10"
 esp-sync = "0.2"
 trouble-host = { version = "0.6", default-features = false, features = ["peripheral", "default-packet-pool-mtu-255", "gatt"] }
@@ -193,3 +193,14 @@ partial_pub_fields = "allow"
 
 [workspace.metadata.cargo-machete]
 ignored = []
+
+# Vendored, minimally-patched trouble-host (third_party/trouble-host, copied from the
+# crates.io 0.6.0 source). The ESP32-H2 on-chip BLE controller accepts an HCI LE
+# Connection Update (Command Status = success) but never runs the LL
+# connection-parameters-request procedure on air, so the peripheral can never lengthen
+# the connection's supervision timeout and the link drops whenever the central's radio is
+# briefly busy. The patch restricts that HCI path to the central role so our peripheral
+# uses the L2CAP Connection Parameter Update signaling instead, which the controller
+# forwards correctly. See third_party/trouble-host/src/connection.rs::update_connection_params.
+[patch.crates-io]
+trouble-host = { path = "third_party/trouble-host" }
