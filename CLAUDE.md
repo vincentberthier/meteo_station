@@ -247,6 +247,17 @@ blueman's cache the script does one bounded, self-terminating `--timeout` discov
 - Query link state via `busctl` (`org.bluez.Device1.Connected`) or the BlueZ
   cache, **never** a second scan.
 
+**Reconnecting requires a fresh scan first (central-side, not a device fault).**
+The device advertises continuously and re-advertises immediately after a
+disconnect (verified: connect → disconnect → link-down gap → reconnect all hold).
+But BlueZ evicts the non-bonded LE device object once discovery stops, so a _cold_
+`bluetoothctl connect F0:CA:FE:00:00:01` reports `Device … not available` until a
+bounded discovery repopulates the cache. Always do one bounded, self-terminating
+`bluetoothctl --timeout N scan on` immediately before each (re)connect — the same
+scan-then-connect-by-address pattern the soak scripts use. The 8 s supervision
+negotiation runs in the firmware accept loop on every connection, so reconnections
+get the same robust link as the first.
+
 If the soak drops, diagnose with `btmon` on gaia during a hold (who drops the link
 and why) before changing code; the first tuning knobs are the conn-interval /
 supervision-timeout values, not another patch.
