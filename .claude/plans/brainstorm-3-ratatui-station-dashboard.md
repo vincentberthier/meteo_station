@@ -2,7 +2,7 @@
 
 - **Source:** '3 (`.claude/brainstorm/3-ratatui-station-dashboard.md`)
 - **Date:** 2026-06-17
-- **Status:** Planned
+- **Status:** Done
 
 ## Summary
 
@@ -1097,14 +1097,14 @@ backend. Validated by the on-device manual gate and cross-checked against
 
 Progress tracking (checked during implementation):
 
-- [ ] 1. Firmware DIS firmware-revision characteristic (`ble.rs`, `ATT_MAX` 10→13)
-- [ ] 2. Scaffold `meteo-tui` crate + workspace member + skeleton
-- [ ] 3. `model.rs` pure logic + tests (state machine, formatting, ring buffer, fw parse)
-- [ ] 4. `ble.rs` bluer central + reconnect state machine (notify_io / AcquireNotify)
-- [ ] 5. `app.rs` AppState + apply reducer + staleness + tests
-- [ ] 6. `ui.rs` ratatui layout + render + smoke test
-- [ ] 7. `main.rs` tokio loop + crossterm input + clock tick + CLI + should_quit tests
-- [ ] 8. Justfile recipes + CLAUDE.md/README docs + full checks green
+- [x] 1. Firmware DIS firmware-revision characteristic (`ble.rs`, `ATT_MAX` 10→13) — DIS `0x180A` + FW Revision String `0x2A26` via `add_characteristic_ro`.
+- [x] 2. Scaffold `meteo-tui` crate + workspace member + skeleton — host-std binary, deps pinned (bluer 0.17, ratatui 0.30, crossterm 0.29, tokio, clap, uuid `macro-diagnostics`).
+- [x] 3. `model.rs` pure logic + tests — `ConnState`/`LinkEvent` FSM, `fmt_*`, `Series`, `parse_fw_revision`; 14 tests.
+- [x] 4. `ble.rs` bluer central + reconnect state machine — `notify_io`/AcquireNotify; link-state-only disconnect detection; bluer needs `bluetoothd` feature.
+- [x] 5. `app.rs` AppState + apply reducer + staleness + tests — 7 tests; frame-age cosmetic only.
+- [x] 6. `ui.rs` ratatui layout + render + smoke test — header/table/charts; 2 `TestBackend` smoke tests.
+- [x] 7. `main.rs` tokio loop + crossterm input + clock tick + CLI + should_quit tests — `ratatui::init/restore`; 4 tests. (Wiring made model/ble live → folded in `const fn` lint fixes.)
+- [x] 8. Justfile recipes + CLAUDE.md/README docs + full checks green — `tui-build`/`tui-run`/`tui-clippy`; folded into `clippy`/`test`. All 5 final checks pass (51 host tests).
 
 **Coordination:** substep 1 (firmware) and substeps 2–3 (host scaffold + pure
 logic) are independent and may proceed in either order. Substep 4 depends on
