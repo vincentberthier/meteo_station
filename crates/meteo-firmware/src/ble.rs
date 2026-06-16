@@ -36,6 +36,7 @@ use trouble_host::advertise::{
     LE_GENERAL_DISCOVERABLE,
 };
 use trouble_host::attribute::{AttributeTable, Characteristic, CharacteristicProp, Service};
+use trouble_host::connection::RequestedConnParams;
 use trouble_host::gatt::GattConnectionEvent;
 use trouble_host::prelude::{
     AttributeServer, DefaultPacketPool, ExternalController, GapConfig, Host, HostResources,
@@ -174,7 +175,7 @@ pub async fn run(controller: Controller) {
 
     join(
         ble_runner(runner),
-        advertise_loop(&mut peripheral, &server, &telemetry_char),
+        advertise_loop(&stack, &mut peripheral, &server, &telemetry_char),
     )
     .await;
 }
@@ -185,6 +186,7 @@ async fn ble_runner(mut runner: Runner<'_, Controller, DefaultPacketPool>) {
 }
 
 async fn advertise_loop(
+    stack: &Stack<'_, Controller, DefaultPacketPool>,
     peripheral: &mut trouble_host::peripheral::Peripheral<'_, Controller, DefaultPacketPool>,
     server: &MeteoServer<'_>,
     telemetry_char: &Characteristic<[u8; 17]>,
@@ -249,6 +251,21 @@ async fn advertise_loop(
             Either::Second(()) => continue, // no central within ADV_REFRESH: re-advertise
         };
 
+        // Centrals (e.g. BlueZ) often connect with a ~420 ms supervision timeout,
+        // which drops the link on any brief radio stall ("Connection Timeout").
+        // As a peripheral, request a robust supervision timeout (8 s) + relaxed
+        // 80 ms interval — ample for 1 Hz telemetry. Best-effort: if the central
+        // rejects, the link simply keeps the central's params.
+        if let Err(e) = raw_conn
+            .update_connection_params(stack, &RequestedConnParams::default())
+            .await
+        {
+            warn!(
+                "BLE: connection-params update request failed: {:?}",
+                defmt::Debug2Format(&e)
+            );
+        }
+
         // Attach the GATT attribute server to this connection.
         let Ok(conn) = raw_conn.with_attribute_server(server) else {
             warn!("BLE: with_attribute_server() failed, re-advertising");
@@ -267,14 +284,37 @@ async fn advertise_loop(
 /// Polls GATT connection events, returning when the connection is disconnected.
 async fn gatt_events(conn: &trouble_host::gatt::GattConnection<'_, '_, DefaultPacketPool>) {
     loop {
-        if let GattConnectionEvent::Disconnected { reason } = conn.next().await {
-            info!(
-                "BLE: disconnected (reason={:?})",
-                defmt::Debug2Format(&reason)
-            );
-            break;
+        match conn.next().await {
+            GattConnectionEvent::Disconnected { reason } => {
+                info!(
+                    "BLE: disconnected (reason={:?})",
+                    defmt::Debug2Format(&reason)
+                );
+                break;
+            }
+            // Log the negotiated link parameters — the supervision timeout is the
+            // knob that governs link stability (a central connecting with a short
+            // ~420 ms timeout drops on any brief RF stall; see scripts/ble_soak.sh
+            // and CLAUDE.md). Useful operational signal; keep it.
+            GattConnectionEvent::ConnectionParamsUpdated {
+                conn_interval,
+                peripheral_latency,
+                supervision_timeout,
+            } => {
+                info!(
+                    "BLE: conn params updated: interval_us={=u64} latency={=u16} supervision_ms={=u64}",
+                    conn_interval.as_micros(),
+                    peripheral_latency,
+                    supervision_timeout.as_millis()
+                );
+            }
+            // PhyUpdated / DataLengthUpdated / RequestConnectionParams / Gatt: the
+            // attribute server handles GATT requests; nothing else to do here.
+            GattConnectionEvent::PhyUpdated { .. }
+            | GattConnectionEvent::RequestConnectionParams(_)
+            | GattConnectionEvent::DataLengthUpdated { .. }
+            | GattConnectionEvent::Gatt { .. } => {}
         }
-        // Ignore all other events (PhyUpdated, ConnectionParamsUpdated, GATT, …)
     }
 }
 
