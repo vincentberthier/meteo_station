@@ -42,7 +42,8 @@ esp-rtos = { version = "0.3", features = ["esp32h2", "embassy", "esp-alloc", "es
 esp-println = { version = "0.17", features = ["esp32h2", "defmt-espflash"] }
 esp-radio = { version = "0.18", features = ["esp32h2", "ble", "unstable", "defmt"] }
 esp-alloc = "0.10"
-trouble-host = { version = "0.6", default-features = false, features = ["peripheral", "default-packet-pool-mtu-255"] }
+esp-sync = "0.2"
+trouble-host = { version = "0.6", default-features = false, features = ["peripheral", "default-packet-pool-mtu-255", "gatt"] }
 embassy-sync = { version = "0.8", features = ["defmt"] }
 embassy-futures = "0.1"
 esp-backtrace = { version = "0.19", features = ["esp32h2", "panic-handler", "defmt"] }

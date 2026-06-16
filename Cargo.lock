@@ -1638,6 +1638,7 @@ dependencies = [
  "esp-println",
  "esp-radio",
  "esp-rtos",
+ "esp-sync",
  "meteo-lib",
  "trouble-host",
 ]

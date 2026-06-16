@@ -8,7 +8,7 @@ use embassy_time::{Duration, Timer};
 use esp_hal::Async;
 use esp_hal::i2c::master::I2c;
 use meteo_lib::bmp388::Bmp388;
-use meteo_lib::trunc2;
+use meteo_lib::{Telemetry, trunc2};
 
 #[embassy_executor::task]
 pub async fn read_barometer(i2c: I2c<'static, Async>, address: u8) {
@@ -34,6 +34,8 @@ pub async fn read_barometer(i2c: I2c<'static, Async>, address: u8) {
                     trunc2(reading.pressure),
                     trunc2(reading.pressure_hpa())
                 );
+                let telem = Telemetry::from_bmp388(&reading);
+                crate::ble::TELEMETRY.signal(telem);
             }
             Err(e) => {
                 warn!("Failed to read sensor: {:?}", Debug2Format(&e));
