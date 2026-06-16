@@ -15,6 +15,7 @@
 
 mod ble;
 mod bmp;
+mod watchdog;
 
 use defmt::info;
 use embassy_executor::Spawner;
@@ -23,6 +24,7 @@ use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Level, Output, OutputConfig};
 use esp_hal::i2c::master::{Config as I2cConfig, I2c};
 use esp_hal::interrupt::software::SoftwareInterruptControl;
+use esp_hal::rtc_cntl::Rtc;
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::Config as BleConfig;
@@ -60,6 +62,11 @@ async fn main(spawner: Spawner) {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let sw_int = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
+
+    // RWDT supervisor: create the RTC handle and spawn the watchdog task.
+    // Rtc::new takes LPWR; the supervisor feeds the RWDT while all tasks beat.
+    let rtc = Rtc::new(peripherals.LPWR);
+    spawner.spawn(watchdog::supervise(rtc).expect("watchdog already spawned"));
 
     // BLE: create the HCI connector and wrap it in an ExternalController for trouble-host.
     // BleConnector::new must be called AFTER esp_rtos::start (radio requires the scheduler).

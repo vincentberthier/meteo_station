@@ -3,6 +3,8 @@
     reason = "false positives from defmt macro expansion"
 )]
 
+use core::sync::atomic::Ordering;
+
 use defmt::{Debug2Format, debug, error, info, warn};
 use embassy_time::{Duration, Timer};
 use esp_hal::Async;
@@ -36,6 +38,7 @@ pub async fn read_barometer(i2c: I2c<'static, Async>, address: u8) {
                 );
                 let telem = Telemetry::from_bmp388(&reading);
                 crate::ble::TELEMETRY.signal(telem);
+                crate::watchdog::BMP_BEAT.fetch_add(1, Ordering::Relaxed);
             }
             Err(e) => {
                 warn!("Failed to read sensor: {:?}", Debug2Format(&e));

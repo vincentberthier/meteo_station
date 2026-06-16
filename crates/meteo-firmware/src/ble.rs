@@ -261,5 +261,6 @@ async fn notify_loop(
         if telemetry_char.notify(conn, &frame).await.is_err() {
             break;
         }
+        crate::watchdog::BLE_BEAT.fetch_add(1, Ordering::Relaxed);
     }
 }
