@@ -3,13 +3,15 @@ members = [
     "crates/meteo-lib",
     "crates/meteo-firmware",
 ]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 version = "0.1.0"
 authors = ["Vincent Berthier <vincent.berthier@posteo.org>"]
 edition = "2024"
+rust-version = "1.85"
 license = "MIT OR Apache-2.0"
+publish = false
 
 [workspace.dependencies]
 # Library dependencies (platform-agnostic, build on host + target)
@@ -49,98 +51,139 @@ tokio = { version = "1", default-features = false, features = ["rt", "macros"] }
 # Workspace members
 meteo-lib = { path = "crates/meteo-lib", default-features = false }
 
+# Embedded note: `debug = true` and NO `strip` — defmt/espflash decode log frames
+# from the ELF's symbols, so stripping would break logging. `codegen-units = 1` +
+# `lto` + `opt-level = "z"` keep the image small.
 [profile.release]
 debug = true
 lto = true
 opt-level = "z"
+codegen-units = 1
+
+[profile.dev]
+debug = 2
+opt-level = "s" # opt-level 0 firmware is often too large to flash comfortably
+
+[profile.gdb]
+inherits = "release"
+debug = 2
+strip = false
+
+[profile.profiling]
+inherits = "release"
+debug = 2
+strip = false
 
 [workspace.lints.rust]
+unsafe_code = "warn"
+unused = { level = "warn", priority = -1 }
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(coverage,coverage_nightly)'] }
 
+# rust-scaffold cargo-toml.md template: enable all four clippy groups, then carve
+# out exceptions. Tuned for this no_std embedded firmware (see the embedded block
+# at the end).
 [workspace.lints.clippy]
-nursery = "warn"
-pedantic = "warn"
-restriction = "allow" # activated individually below
-significant_drop_in_scrutinee = { level = "allow", priority = 1 } # annoying false positives on github
-wildcard_imports = { level = "allow", priority = 1 }
+restriction = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
 
-# Restriction lints
-absolute_paths = { level = "warn", priority = 1 }
-alloc_instead_of_core = { level = "warn", priority = 1 }
-# allow_attributes = { level = "warn", priority = 1 }
-allow_attributes_without_reason = { level = "warn", priority = 1 }
-arithmetic_side_effects = { level = "warn", priority = 1 }
-assertions_on_result_states = { level = "warn", priority = 1 }
-as_underscore = { level = "warn", priority = 1 }
-big_endian_bytes = { level = "warn", priority = 1 }
-clone_on_ref_ptr = { level = "warn", priority = 1 }
-create_dir = { level = "warn", priority = 1 }
-dbg_macro = { level = "warn", priority = 1 }
-default_numeric_fallback = { level = "warn", priority = 1 }
-default_union_representation = { level = "warn", priority = 1 }
-deref_by_slicing = { level = "warn", priority = 1 }
-disallowed_script_idents = { level = "warn", priority = 1 }
-else_if_without_else = { level = "warn", priority = 1 }
-empty_drop = { level = "warn", priority = 1 }
-empty_structs_with_brackets = { level = "warn", priority = 1 }
-exit = { level = "warn", priority = 1 }
-expect_used = { level = "warn", priority = 1 }
-filetype_is_file = { level = "warn", priority = 1 }
-float_cmp_const = { level = "warn", priority = 1 }
-fn_to_numeric_cast_any = { level = "warn", priority = 1 }
-format_push_string = { level = "warn", priority = 1 }
-get_unwrap = { level = "warn", priority = 1 }
-host_endian_bytes = { level = "warn", priority = 1 }
-if_then_some_else_none = { level = "warn", priority = 1 }
-impl_trait_in_params = { level = "warn", priority = 1 }
-indexing_slicing = { level = "allow", priority = 1 }
-inline_asm_x86_att_syntax = { level = "warn", priority = 1 }
-inline_asm_x86_intel_syntax = { level = "warn", priority = 1 }
-integer_division = { level = "warn", priority = 1 }
-iter_over_hash_type = { level = "warn", priority = 1 }
-large_include_file = { level = "warn", priority = 1 }
-let_underscore_must_use = { level = "warn", priority = 1 }
-little_endian_bytes = { level = "warn", priority = 1 }
-lossy_float_literal = { level = "warn", priority = 1 }
-map_err_ignore = { level = "warn", priority = 1 }
-mem_forget = { level = "warn", priority = 1 }
-missing_assert_message = { level = "warn", priority = 1 }
-missing_asserts_for_indexing = { level = "warn", priority = 1 }
-mixed_read_write_in_expression = { level = "warn", priority = 1 }
-multiple_inherent_impl = { level = "allow", priority = 1 }
-multiple_unsafe_ops_per_block = { level = "warn", priority = 1 }
-mutex_atomic = { level = "warn", priority = 1 }
-needless_raw_strings = { level = "warn", priority = 1 }
-panic_in_result_fn = { level = "warn", priority = 1 }
-panic = { level = "warn", priority = 1 }
-print_stderr = { level = "warn", priority = 1 }
-print_stdout = { level = "warn", priority = 1 }
-pub_without_shorthand = { level = "warn", priority = 1 }
-rc_buffer = { level = "warn", priority = 1 }
-rc_mutex = { level = "warn", priority = 1 }
-redundant_type_annotations = { level = "warn", priority = 1 }
-rest_pat_in_fully_bound_structs = { level = "warn", priority = 1 }
-same_name_method = { level = "warn", priority = 1 }
-# self_named_module_files = { level = "warn", priority = 1 }
-semicolon_inside_block = { level = "warn", priority = 1 }
-shadow_unrelated = { level = "warn", priority = 1 }
-string_add = { level = "warn", priority = 1 }
-string_slice = { level = "warn", priority = 1 }
-suspicious_xor_used_as_pow = { level = "warn", priority = 1 }
-tests_outside_test_module = { level = "warn", priority = 1 }
-todo = { level = "warn", priority = 1 }
-try_err = { level = "warn", priority = 1 }
-undocumented_unsafe_blocks = { level = "warn", priority = 1 }
-unimplemented = { level = "warn", priority = 1 }
-unnecessary_safety_comment = { level = "warn", priority = 1 }
-unnecessary_safety_doc = { level = "warn", priority = 1 }
-unnecessary_self_imports = { level = "warn", priority = 1 }
-unneeded_field_pattern = { level = "warn", priority = 1 }
-unreachable = { level = "warn", priority = 1 }
-unseparated_literal_suffix = { level = "warn", priority = 1 }
-unwrap_in_result = { level = "warn", priority = 1 }
-unwrap_used = { level = "warn", priority = 1 }
-verbose_file_reads = { level = "warn", priority = 1 }
+# We intentionally enable the restriction group as a whole.
+blanket_clippy_restriction_lints = "allow"
+
+# Contradictory pairs — keep the preferred style, allow the opposite.
+self_named_module_files = "allow"
+semicolon_outside_block = "allow"
+separated_literal_suffix = "allow"
+pub_with_shorthand = "allow"
+
+# Contradicts idiomatic Rust.
+implicit_return = "allow"
+question_mark_used = "allow"
+
+# Too noisy for practical use.
+absolute_paths = "allow"
+cognitive_complexity = "allow"
+default_numeric_fallback = "allow"
+exhaustive_enums = "allow"
+exhaustive_structs = "allow"
+integer_division = "allow"
+integer_division_remainder_used = "allow"
+modulo_arithmetic = "allow"
+module_name_repetitions = "allow"
+multiple_inherent_impl = "allow"
+pattern_type_mismatch = "allow"
+single_call_fn = "allow"
+
+# Endianness trio — mutually contradictory.
+big_endian_bytes = "allow"
+little_endian_bytes = "allow"
+host_endian_bytes = "allow"
+
+# Assembly style.
+inline_asm_x86_att_syntax = "allow"
+inline_asm_x86_intel_syntax = "allow"
+
+# Legitimate patterns.
+allow_attributes = "allow"
+as_underscore = "allow"
+as_pointer_underscore = "allow"
+create_dir = "allow"
+else_if_without_else = "allow"
+exit = "allow"
+float_arithmetic = "allow"
+non_ascii_literal = "allow"
+pub_use = "allow"
+ref_patterns = "allow"
+
+# Niche / needs separate configuration.
+assertions_on_result_states = "allow"
+cfg_not_test = "allow"
+default_union_representation = "allow"
+disallowed_script_idents = "allow"
+doc_paragraphs_missing_punctuation = "allow"
+field_scoped_visibility_modifiers = "allow"
+filetype_is_file = "allow"
+iter_over_hash_type = "allow"
+missing_trait_methods = "allow"
+multiple_unsafe_ops_per_block = "allow"
+mutex_integer = "allow"
+non_zero_suggestions = "allow"
+pointer_format = "allow"
+unneeded_field_pattern = "allow"
+
+# --- no_std embedded adaptations (the template targets std app/lib crates) ---
+# alloc_instead_of_core / std_instead_of_* stay ACTIVE on purpose (we are no_std).
+# Register/driver code and defmt macro expansion index slices directly.
+indexing_slicing = "allow"
+# Embassy tasks and the main loop are intentionally infinite (cooperative scheduler).
+infinite_loop = "allow"
+# The esp-hal dependency tree legitimately pulls several versions of some
+# transitive crates; not actionable from this workspace.
+multiple_crate_versions = "allow"
+# Both crates are publish = false, so crates.io metadata is not required.
+cargo_common_metadata = "allow"
+# Fixed-point sensor-calibration math casts pervasively; TryFrom everywhere would
+# obscure the arithmetic. Overflow is still caught by arithmetic_side_effects.
+as_conversions = "allow"
+# The sensor/BLE driver error enums are deliberately named `Error` (idiomatic for a
+# single per-module error type); renaming them is a public-API change.
+error_impl_error = "allow"
+# This project uses the `mod.rs` module layout, not the self-named-file style.
+mod_module_files = "allow"
+# Source items are grouped logically (registers, ctor, methods), not alphabetically.
+arbitrary_source_item_ordering = "allow"
+# Drivers/utilities don't force #[inline] on every public method; LTO handles it.
+missing_inline_in_public_items = "allow"
+# Short idents (e, f, s, i) are idiomatic in math, formatter, and closure code here.
+min_ident_chars = "allow"
+# Private fields/variants/consts are not required to carry doc comments.
+missing_docs_in_private_items = "allow"
+# Pre-existing driver style: `.ok()` to discard, `let _ =` without a type, and
+# structs that mix pub/private fields. Kept as-is (not part of the config change).
+unused_result_ok = "allow"
+let_underscore_untyped = "allow"
+partial_pub_fields = "allow"
 
 [workspace.metadata.cargo-machete]
 ignored = []
