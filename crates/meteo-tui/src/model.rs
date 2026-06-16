@@ -48,7 +48,7 @@ impl ConnState {
     /// `LinkLost`/`AttemptFailed` from any state → `Reconnecting`;
     /// `ScanStarted` → `Scanning`; happy path: `Scanning→Connecting→Resolving→Live`.
     #[must_use]
-    pub fn next(self, ev: LinkEvent) -> Self {
+    pub const fn next(self, ev: LinkEvent) -> Self {
         match (self, ev) {
             (_, LinkEvent::LinkLost | LinkEvent::AttemptFailed) => Self::Reconnecting,
             (_, LinkEvent::ScanStarted) => Self::Scanning,
@@ -61,7 +61,7 @@ impl ConnState {
 
     /// Human-readable label for the connection state, suitable for the TUI status bar.
     #[must_use]
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Scanning => "Scanning",
             Self::Connecting => "Connecting",
@@ -201,6 +201,10 @@ pub fn parse_fw_revision(bytes: &[u8]) -> Option<String> {
 
 // grcov exclude start
 #[expect(clippy::panic_in_result_fn, reason = "test module")]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "TestResult is the standard test pattern"
+)]
 #[cfg(test)]
 mod tests {
     use core::{error, result};

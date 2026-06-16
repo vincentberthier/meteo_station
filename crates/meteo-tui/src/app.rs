@@ -96,6 +96,10 @@ impl AppState {
 
 // grcov exclude start
 #[expect(clippy::panic_in_result_fn, reason = "test module")]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "TestResult is the standard test pattern"
+)]
 #[cfg(test)]
 mod tests {
     use core::{error, result};

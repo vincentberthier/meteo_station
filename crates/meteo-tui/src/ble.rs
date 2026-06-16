@@ -37,12 +37,12 @@ const fn uuid16(x: u16) -> uuid::Uuid {
 }
 
 /// Device Information Service UUID (0x180A).
-fn dis_service_uuid() -> uuid::Uuid {
+const fn dis_service_uuid() -> uuid::Uuid {
     uuid16(0x180A)
 }
 
 /// Firmware Revision String characteristic UUID (0x2A26).
-fn fw_rev_uuid() -> uuid::Uuid {
+const fn fw_rev_uuid() -> uuid::Uuid {
     uuid16(0x2A26)
 }
 
