@@ -25,9 +25,10 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use defmt::{info, warn};
 use embassy_futures::join::join;
-use embassy_futures::select::select;
+use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
+use embassy_time::{Duration, Timer};
 use esp_radio::ble::controller::BleConnector;
 use meteo_lib::Telemetry;
 use trouble_host::advertise::{
@@ -42,13 +43,26 @@ use trouble_host::prelude::{
 };
 use trouble_host::{Address, Stack};
 
-/// Fixed BLE static-random address for the weather station (top two MSB bits
-/// set → random-static per BLE spec). Keep in sync with `scripts/ble_soak.sh`.
-const STATION_ADDR: [u8; 6] = [0xF0, 0xCA, 0xFE, 0x00, 0x00, 0x01];
+/// Fixed BLE static-random address for the weather station, in the byte order
+/// `Address::random` expects: little-endian (LSB first), i.e. the on-air order.
+/// `BlueZ`/`bluetoothctl` display addresses MSB-first, so these bytes reversed give
+/// the human-readable `F0:CA:FE:00:00:01` used by `scripts/ble_soak.sh` and
+/// `scripts/ble_notify_check.sh`. The MSB (`0xF0`, last byte here) has its top two
+/// bits set → a valid static-random address per the BLE spec. Keep in sync with the
+/// scripts' `DEVICE` default.
+const STATION_ADDR: [u8; 6] = [0x01, 0x00, 0x00, 0xFE, 0xCA, 0xF0];
 const STATION_NAME: &str = "MeteoStation";
 
 const CONNECTIONS_MAX: usize = 1;
 const L2CAP_CHANNELS_MAX: usize = 2;
+
+/// How often the idle advertise loop re-arms while waiting for a central. Each
+/// re-arm bumps `ADV_BEAT`, the BLE-liveness signal the RWDT supervisor watches.
+/// Re-arming tears down and restarts advertising, which races a central's
+/// connection attempt, so this is kept as long as the 8 s RWDT timeout allows: at
+/// 4 s, `ADV_BEAT` advances at least once per ~4 s — comfortably inside the 8 s
+/// window — while minimizing the advertising churn that hurts connectability.
+const ADV_REFRESH: Duration = Duration::from_secs(4);
 
 // ---------------------------------------------------------------------------
 // Attribute table sizing
@@ -175,17 +189,27 @@ async fn advertise_loop(
     server: &MeteoServer<'_>,
     telemetry_char: &Characteristic<[u8; 17]>,
 ) {
-    // Build advertisement data once: Flags + Complete Local Name + 128-bit service UUID.
+    // Build the advertisement + scan-response data once. The 31-byte legacy AD
+    // limit cannot hold Flags + the full local name + a 128-bit service UUID
+    // (3 + 14 + 18 = 35 bytes), so the UUID goes in the scan response: the
+    // advertisement carries Flags + Complete Local Name (17 bytes), and a central
+    // that scans gets the 128-bit service UUID (18 bytes) in the scan response.
     let mut adv_buf = [0_u8; 31];
     let adv_len = AdStructure::encode_slice(
         &[
             AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
             AdStructure::CompleteLocalName(STATION_NAME.as_bytes()),
-            AdStructure::ServiceUuids128(&[SERVICE_UUID_LE]),
         ],
         &mut adv_buf,
     )
     .expect("adv encode");
+
+    let mut scan_buf = [0_u8; 31];
+    let scan_len = AdStructure::encode_slice(
+        &[AdStructure::ServiceUuids128(&[SERVICE_UUID_LE])],
+        &mut scan_buf,
+    )
+    .expect("scan-response encode");
 
     let params = AdvertisementParameters::default();
 
@@ -201,7 +225,7 @@ async fn advertise_loop(
                 &params,
                 Advertisement::ConnectableScannableUndirected {
                     adv_data: &adv_buf[..adv_len],
-                    scan_data: &[],
+                    scan_data: &scan_buf[..scan_len],
                 },
             )
             .await
@@ -210,9 +234,19 @@ async fn advertise_loop(
             continue;
         };
 
-        let Ok(raw_conn) = advertiser.accept().await else {
-            warn!("BLE: accept() failed (timeout?), re-advertising");
-            continue;
+        // Wait for a central to connect, but bound the wait: if none arrives within
+        // ADV_REFRESH, drop the advertiser (its Drop stops advertising) and loop to
+        // re-advertise. This keeps ADV_BEAT advancing while idle (no central), which
+        // is the BLE liveness signal the RWDT supervisor watches — without it, an
+        // idle-but-healthy device parks forever in accept(), ADV_BEAT freezes, and
+        // the watchdog false-resets the chip.
+        let raw_conn = match select(advertiser.accept(), Timer::after(ADV_REFRESH)).await {
+            Either::First(Ok(c)) => c,
+            Either::First(Err(_)) => {
+                warn!("BLE: accept() failed, re-advertising");
+                continue;
+            }
+            Either::Second(()) => continue, // no central within ADV_REFRESH: re-advertise
         };
 
         // Attach the GATT attribute server to this connection.
