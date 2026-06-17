@@ -90,7 +90,8 @@ crates/
 │   └── src/
 │       ├── main.rs        # esp-hal/esp-rtos init, GPIO8 LED blink, task spawning
 │       ├── bmp.rs         # BMP388 task; retries init in loop; bumps BMP_BEAT
-│       ├── mlx.rs         # MLX90614 task; reads sky/ambient IR temps; bumps MLX_BEAT
+│       ├── mlx.rs         # MLX90614 task; reads sky/ambient IR temps, sends on the
+│       │                  #   sensor channel (not watchdog-gated; see resilience note)
 │       ├── bus.rs         # Shared I2C0 async-mutex bus; per-sensor I2cDevice handles
 │       ├── aggregator.rs  # Aggregator task: merges BMP + MLX readings into TELEMETRY,
 │       │                  #   publishes a merged frame at 1 Hz; bumps AGG_BEAT
@@ -137,9 +138,9 @@ BlueZ binding), subscribes to the telemetry notify characteristic, decodes each
 18-byte v2 frame via `meteo-lib::ble::frame::decode`, and renders a live terminal
 dashboard with ratatui:
 
-- All 8 frame fields (temperature, pressure, humidity, light, wind speed/direction,
-  rainfall, battery).
-- Live scrolling temperature and pressure mini-charts.
+- All 8 frame fields (air temperature, pressure, humidity, sky/IR temperature,
+  luminosity, wind speed/direction, battery) plus the diagnostics row.
+- Live scrolling air-temperature, sky-temperature, and pressure mini-charts.
 - Header bar: wall clock, app version, firmware version (read from DIS), connection
   status.
 

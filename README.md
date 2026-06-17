@@ -7,11 +7,14 @@ built on the [Embassy](https://embassy.dev) async runtime over esp-hal + esp-rto
 ## Workspace layout
 
 - `crates/meteo-firmware` — ESP32-H2 binary: esp-hal/esp-rtos init, GPIO8 status
-  LED, Embassy tasks. esp deps are gated to `cfg(target_arch = "riscv32")`.
+  LED, Embassy tasks (BMP388 + MLX90614 on a shared I2C bus, aggregator, on-chip
+  BLE, RWDT watchdog). esp deps are gated to `cfg(target_arch = "riscv32")`.
 - `crates/meteo-lib` — hardware-agnostic drivers (host-testable) using
-  `embedded-hal-async` traits: BMP388 barometer, v1 BLE wire-frame encode/decode.
+  `embedded-hal-async` traits: BMP388 barometer, MLX90614 IR thermometer, and the
+  v2 BLE wire-frame (encode/decode + diagnostics byte).
 - `crates/meteo-tui` — terminal dashboard (host, `x86_64-linux`): connects to the
-  station over BLE, decodes telemetry frames, and renders a live ratatui UI.
+  station over BLE, decodes telemetry frames, and renders a live ratatui UI
+  (telemetry table + air-temp / sky-temp / pressure charts).
 
 ## Build & flash
 
@@ -43,16 +46,19 @@ Press `q`, Esc, or Ctrl-C to quit.
 Host prerequisite: `bluetoothd` must be running at runtime; `libdbus-1-dev` is
 required at build time (provides the BlueZ D-Bus binding).
 
-## BLE link soak test — `scripts/ble_soak.sh`
+## BLE acceptance — `scripts/ble_soak.sh` + `scripts/ble_notify_check.sh`
 
-> **Historical (STM32 + RN4871).** The ESP32-H2 port dropped the external RN4871
-> module; native on-chip BLE is a later task. This harness and the `meteo-lib`
-> RN4871 parser are retained for that work and for the methodology below.
+The ESP32-H2 advertises **on-chip** BLE as `MeteoStation` (static random address
+`F0:CA:FE:00:00:01`) and pushes an 18-byte v2 telemetry frame at 1 Hz over a GATT
+notify characteristic. The host unit tests only prove the frame codec; two scripts
+(run on gaia, BlueZ 5.86) are the real acceptance gate for the radio link:
 
-A self-validating acceptance harness for the RN4871 BLE link. The firmware
-brought the module up as device `80:1F:12:B6:60:BF`, advertising continuously
-with no GATT services. The host unit tests only prove the protocol parser; the
-**soak test is the real acceptance gate** for the radio link.
+- **`ble_soak.sh`** — link-stability soak (described below).
+- **`ble_notify_check.sh`** — data-flow check: subscribes via BlueZ `AcquireNotify`
+  and asserts at least 5 well-formed 18-byte frames (byte[0] == `0x02`) within the
+  window. It uses `AcquireNotify` rather than `bluetoothctl notify on` because BlueZ
+  only re-emits the `Value` property when it _changes_, and the near-constant
+  telemetry would otherwise be deduped to silence.
 
 The script drives, indefinitely:
 
@@ -86,7 +92,7 @@ before starting.
 
 | Variable          | Default             | Meaning                                         |
 | ----------------- | ------------------- | ----------------------------------------------- |
-| `DEVICE`          | `80:1F:12:B6:60:BF` | BLE address of the peripheral                   |
+| `DEVICE`          | `F0:CA:FE:00:00:01` | BLE address of the peripheral                   |
 | `ADAPTER`         | `hci0`              | Local HCI adapter                               |
 | `HOLD_SECS`       | `360`               | Seconds the link must stay up per cycle (6 min) |
 | `GAP_SECS`        | `90`                | Seconds between disconnect and reconnect        |
