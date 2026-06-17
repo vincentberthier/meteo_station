@@ -15,6 +15,7 @@
 
 mod ble;
 mod bmp;
+mod bus;
 mod watchdog;
 
 use defmt::info;
