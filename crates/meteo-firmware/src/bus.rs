@@ -11,16 +11,8 @@ use esp_hal::i2c::master::I2c;
 use static_cell::StaticCell;
 
 /// Concrete shared-bus I2C handle handed to each sensor task.
-#[allow(
-    dead_code,
-    reason = "consumed by sensor tasks once wired up in main.rs (substep 10)"
-)]
 pub type SharedI2c = I2cDevice<'static, CriticalSectionRawMutex, I2c<'static, Async>>;
 
 /// Backing storage for the one shared I2C0 bus mutex.
-#[allow(
-    dead_code,
-    reason = "consumed by bus construction in main.rs (substep 10)"
-)]
 pub static I2C_BUS: StaticCell<Mutex<CriticalSectionRawMutex, I2c<'static, Async>>> =
     StaticCell::new();

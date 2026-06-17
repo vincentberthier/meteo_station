@@ -15,7 +15,6 @@ use meteo_lib::{SensorReading, trunc2};
 use crate::aggregator::SENSOR_CHANNEL;
 use crate::bus::SharedI2c;
 
-#[allow(dead_code, reason = "spawned in main.rs in substep 10")]
 #[embassy_executor::task]
 pub async fn read_sky(i2c: SharedI2c, address: u8) {
     debug!("Setting up MLX90614 sky-IR sensor");

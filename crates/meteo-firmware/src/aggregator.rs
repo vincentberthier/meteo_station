@@ -21,13 +21,8 @@ const OCCLUSION_THRESHOLD_C: f32 = 5.0;
 
 /// Inter-task sensor channel: every sensor task sends `SensorReading`s here; the
 /// aggregator is the sole receiver. Capacity 8 ≫ the 2 producers at ≤1 Hz.
-#[allow(
-    dead_code,
-    reason = "produced by sensor tasks in substeps 8/9, consumed here"
-)]
 pub static SENSOR_CHANNEL: Channel<CriticalSectionRawMutex, SensorReading, 8> = Channel::new();
 
-#[allow(dead_code, reason = "spawned in main.rs in substep 10")]
 #[embassy_executor::task]
 pub async fn run() {
     let mut agg = Aggregator::new(OCCLUSION_THRESHOLD_C);
