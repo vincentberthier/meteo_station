@@ -2,7 +2,7 @@
 
 - **Source:** '5 (brainstorm `.claude/brainstorm/5-mlx90614-ir-sensor.md`)
 - **Date:** 2026-06-17
-- **Status:** Planned
+- **Status:** Done
 
 ## Summary
 
@@ -1177,16 +1177,20 @@ chain explicitly via the defmt log sequence:
 
 Progress tracking (checked off during `/tyrex:code:implement-light`):
 
-- [ ] 1. Frame v2 + `Diagnostics` (meteo-lib/ble/frame.rs)
-- [ ] 2. MLX90614 driver (meteo-lib/sensors/mlx90614.rs)
-- [ ] 3. Aggregator + `SensorReading` (meteo-lib/aggregate.rs)
-- [ ] 4. lib.rs re-exports
-- [ ] 5. Dependencies (workspace + firmware Cargo.toml)
-- [ ] 6. `SharedI2c` bus module (firmware/bus.rs)
-- [ ] 7. Aggregator task + channel + `AGG_BEAT`; task-liveness beat semantics (firmware/aggregator.rs, watchdog.rs)
-- [ ] 8. BMP388 task rework + resilience: retry init, per-cycle heartbeat (firmware/bmp.rs)
-- [ ] 9. MLX90614 task (firmware/mlx.rs)
-- [ ] 10. main.rs wiring **+ MLX PWM-exit SCL-low nudge before I2C init**
-- [ ] 11. BLE characteristic length → `FRAME_LEN` (firmware/ble.rs)
-- [ ] 12. TUI diagnostics row — occlusion + BMP388 fault, red when alerting (meteo-tui model.rs, ui.rs)
-- [ ] 13. Acceptance scripts + CLAUDE.md
+- [x] 1. Frame v2 + `Diagnostics` (meteo-lib/ble/frame.rs)
+- [x] 2. MLX90614 driver (meteo-lib/sensors/mlx90614.rs)
+- [x] 3. Aggregator + `SensorReading` (meteo-lib/aggregate.rs)
+- [x] 4. lib.rs re-exports
+- [x] 5. Dependencies (workspace + firmware Cargo.toml) — embassy-embedded-hal 0.6.0, static-cell 2.1.1
+- [x] 6. `SharedI2c` bus module (firmware/bus.rs)
+- [x] 7. Aggregator task + channel + `AGG_BEAT`; task-liveness beat semantics (firmware/aggregator.rs, watchdog.rs)
+- [x] 8. BMP388 task rework + resilience: retry init, per-cycle heartbeat (firmware/bmp.rs)
+- [x] 9. MLX90614 task (firmware/mlx.rs)
+- [x] 10. main.rs wiring **+ MLX PWM-exit SCL-low nudge before I2C init**
+- [x] 11. BLE characteristic length → `FRAME_LEN` (firmware/ble.rs) — landed early (after substep 5) so the firmware-code substeps could compile
+- [x] 12. TUI diagnostics row — occlusion + BMP388 fault, red when alerting (meteo-tui model.rs, ui.rs)
+- [x] 13. Acceptance scripts + CLAUDE.md
+
+Implementation order: 1→5, then 11 (early, to unblock firmware compilation), 6, 7, 9, 8, 10, 12, 13.
+On-device acceptance (PWM-exit, RWDT gates, soak/notify scripts, TUI sky temp + diagnostics row)
+remains a manual gate — all host-side checks (build, clippy, fmt, 43+38 tests, doc test, audit) pass.
