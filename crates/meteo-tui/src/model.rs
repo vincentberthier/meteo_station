@@ -7,6 +7,8 @@
 
 use std::collections::VecDeque;
 
+use meteo_lib::Diagnostics;
+
 /// BLE connection state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnState {
@@ -126,6 +128,36 @@ pub fn fmt_wind_dir(v: Option<f32>) -> String {
 #[must_use]
 pub fn fmt_battery(v: Option<u8>) -> String {
     v.map_or_else(|| "N/A".to_owned(), |b| format!("{b} %"))
+}
+
+/// Format the diagnostics bitfield as a human-readable status line.
+///
+/// `"OK"` when no flags are set; otherwise a comma-joined list of active faults,
+/// e.g. `"sky occluded, BMP388 fault"`. Scales as new flags are added.
+#[must_use]
+pub fn fmt_diagnostics(diag: Diagnostics) -> String {
+    let mut flags: Vec<&str> = Vec::new();
+    if diag.occlusion() {
+        flags.push("sky occluded");
+    }
+    if diag.baro_fault() {
+        flags.push("BMP388 fault");
+    }
+    if flags.is_empty() {
+        "OK".to_owned()
+    } else {
+        flags.join(", ")
+    }
+}
+
+/// `true` if any diagnostics flag is set (drives red highlighting in the UI).
+///
+/// Tests the raw byte (`Diagnostics.0` is `pub`) so it covers every current and
+/// future flag with no per-bit update — unlike `fmt_diagnostics`, which must name
+/// each flag to label it.
+#[must_use]
+pub const fn diagnostics_alert(diag: Diagnostics) -> bool {
+    diag.0 != 0
 }
 
 /// Format a floating-point sensor value with a physical unit.
@@ -400,6 +432,76 @@ mod tests {
 
         // Then
         assert_eq!(result, "80 %");
+        Ok(())
+    }
+
+    // --- fmt_diagnostics / diagnostics_alert tests ---
+
+    #[test]
+    fn fmt_diagnostics_none_renders_ok() -> TestResult {
+        // Given / When
+        let result = fmt_diagnostics(Diagnostics::empty());
+
+        // Then
+        assert_eq!(result, "OK");
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_diagnostics_occlusion_only() -> TestResult {
+        // Given / When
+        let result = fmt_diagnostics(Diagnostics::empty().with_occlusion(true));
+
+        // Then
+        assert_eq!(result, "sky occluded");
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_diagnostics_baro_fault_only() -> TestResult {
+        // Given / When
+        let result = fmt_diagnostics(Diagnostics::empty().with_baro_fault(true));
+
+        // Then
+        assert_eq!(result, "BMP388 fault");
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_diagnostics_multiple_flags_joined() -> TestResult {
+        // Given — both occlusion and baro fault set
+        let diag = Diagnostics::empty()
+            .with_occlusion(true)
+            .with_baro_fault(true);
+
+        // When
+        let result = fmt_diagnostics(diag);
+
+        // Then — occlusion first, then baro fault, comma-separated
+        assert_eq!(result, "sky occluded, BMP388 fault");
+        Ok(())
+    }
+
+    #[test]
+    fn diagnostics_alert_true_when_any_flag() -> TestResult {
+        // Given / When / Then — no flags: false
+        assert!(!diagnostics_alert(Diagnostics::empty()));
+
+        // occlusion only: true
+        assert!(diagnostics_alert(Diagnostics::empty().with_occlusion(true)));
+
+        // baro fault only: true
+        assert!(diagnostics_alert(
+            Diagnostics::empty().with_baro_fault(true)
+        ));
+
+        // both flags: true
+        assert!(diagnostics_alert(
+            Diagnostics::empty()
+                .with_occlusion(true)
+                .with_baro_fault(true)
+        ));
+
         Ok(())
     }
 
