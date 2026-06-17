@@ -27,6 +27,8 @@ esp-radio = { workspace = true }
 esp-alloc = { workspace = true }
 esp-sync = { workspace = true }
 trouble-host = { workspace = true }
+embassy-embedded-hal = { workspace = true }
+static_cell = { workspace = true }
 
 [lints]
 workspace = true

@@ -47,6 +47,8 @@ esp-sync = "0.2"
 trouble-host = { version = "0.6", default-features = false, features = ["peripheral", "default-packet-pool-mtu-255", "gatt"] }
 embassy-sync = { version = "0.8", features = ["defmt"] }
 embassy-futures = "0.1"
+embassy-embedded-hal = { version = "0.6", default-features = false }
+static_cell = "2.1"
 esp-backtrace = { version = "0.19", features = ["esp32h2", "panic-handler", "defmt"] }
 esp-bootloader-esp-idf = { version = "0.5", features = ["esp32h2"] }
 
