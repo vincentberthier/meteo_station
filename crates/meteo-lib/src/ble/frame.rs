@@ -5,36 +5,96 @@
     reason = "defmt::Format macro expansion triggers this lint as a false positive"
 )]
 
-//! Telemetry wire frame v1 — fixed-length, little-endian, 17 bytes.
+//! Telemetry wire frame v2 — fixed-length, little-endian, 18 bytes.
 //!
 //! All multi-byte fields are encoded **little-endian**; the BLE central must
 //! decode them accordingly.
 //!
 //! # Frame layout
 //!
-//! | Off   | Field               | Wire type | Encoding                   | Sentinel (None) |
-//! |-------|---------------------|-----------|----------------------------|-----------------|
-//! | 0     | version             | u8        | [`FRAME_VERSION`] (= 1)    | —               |
-//! | 1–2   | temperature         | i16 LE    | round(°C × 100) centi-°C   | `i16::MIN`      |
-//! | 3–4   | pressure            | u16 LE    | round(hPa × 10) deci-hPa   | `u16::MAX`      |
-//! | 5–6   | humidity            | u16 LE    | round(%RH × 100) centi-%RH | `u16::MAX`      |
-//! | 7–8   | sky/IR temp         | i16 LE    | centi-°C                   | `i16::MIN`      |
-//! | 9–10  | luminosity mantissa | u16 LE    | mantissa × 10^exp ≈ lux    | `u16::MAX`      |
-//! | 11    | luminosity exponent | u8        | see lux encoding           | (mantissa=MAX)  |
-//! | 12–13 | wind speed          | u16 LE    | round(m/s × 100) cm/s      | `u16::MAX`      |
-//! | 14–15 | wind direction      | u16 LE    | round(deg × 10) deci-deg   | `u16::MAX`      |
-//! | 16    | battery             | u8        | percent 0..=100            | `0xFF`          |
+//! | Off   | Field               | Wire type | Encoding                                                                    | Sentinel (None)    |
+//! |-------|---------------------|-----------|-----------------------------------------------------------------------------|--------------------|
+//! | 0     | version             | u8        | [`FRAME_VERSION`] (= 2)                                                     | —                  |
+//! | 1–2   | temperature         | i16 LE    | round(°C × 100) centi-°C                                                    | `i16::MIN`         |
+//! | 3–4   | pressure            | u16 LE    | round(hPa × 10) deci-hPa                                                   | `u16::MAX`         |
+//! | 5–6   | humidity            | u16 LE    | round(%RH × 100) centi-%RH                                                  | `u16::MAX`         |
+//! | 7–8   | sky/IR temp         | i16 LE    | centi-°C                                                                    | `i16::MIN`         |
+//! | 9–10  | luminosity mantissa | u16 LE    | mantissa × 10^exp ≈ lux                                                     | `u16::MAX`         |
+//! | 11    | luminosity exponent | u8        | see lux encoding                                                            | (mantissa=MAX)     |
+//! | 12–13 | wind speed          | u16 LE    | round(m/s × 100) cm/s                                                       | `u16::MAX`         |
+//! | 14–15 | wind direction      | u16 LE    | round(deg × 10) deci-deg                                                    | `u16::MAX`         |
+//! | 16    | battery             | u8        | percent 0..=100                                                             | `0xFF`             |
+//! | 17    | diagnostics         | u8        | bitfield: bit0 = sky-IR occlusion, bit1 = BMP388 fault, bits 2–7 reserved  | — (always present) |
 
 /// Wire-format version tag written to byte 0 of every frame.
-pub const FRAME_VERSION: u8 = 1;
+pub const FRAME_VERSION: u8 = 2;
 
-/// Total length (in bytes) of a v1 telemetry frame.
-pub const FRAME_LEN: usize = 17;
+/// Total length (in bytes) of a v2 telemetry frame.
+pub const FRAME_LEN: usize = 18;
+
+/// Per-frame health/diagnostics bitfield (frame v2, byte 17).
+///
+/// Bit 0 = sky-IR sensor ambient diverges from the barometer air temperature
+/// beyond the configured threshold (possible occlusion / icing).
+/// Bit 1 = BMP388 fault (not initialized / read failing). Bits 2–7 are reserved
+/// and always 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct Diagnostics(pub u8);
+
+impl Diagnostics {
+    /// Bit 0: sky-IR ambient diverges from barometer air temp (occlusion/icing).
+    pub const SKY_IR_OCCLUSION: u8 = 1 << 0;
+    /// Bit 1: BMP388 not providing data — failed to initialize, or a read error
+    /// forced a re-init. While set, `temperature_c`/`pressure_hpa` are `None`.
+    pub const BARO_FAULT: u8 = 1 << 1;
+    // Bits 2–7 reserved (0) for future per-sensor health flags (BME280, VEML7700, MLX).
+
+    /// All-clear diagnostics (no flags set).
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self(0)
+    }
+
+    /// Returns `true` if the sky-IR occlusion bit is set.
+    #[must_use]
+    pub const fn occlusion(self) -> bool {
+        self.0 & Self::SKY_IR_OCCLUSION != 0
+    }
+
+    /// Returns a copy with the occlusion bit set to `set`.
+    #[must_use]
+    pub const fn with_occlusion(self, set: bool) -> Self {
+        self.with_flag(Self::SKY_IR_OCCLUSION, set)
+    }
+
+    /// Returns `true` if the BMP388 fault bit is set.
+    #[must_use]
+    pub const fn baro_fault(self) -> bool {
+        self.0 & Self::BARO_FAULT != 0
+    }
+
+    /// Returns a copy with the BMP388 fault bit set to `set`.
+    #[must_use]
+    pub const fn with_baro_fault(self, set: bool) -> Self {
+        self.with_flag(Self::BARO_FAULT, set)
+    }
+
+    /// Returns a copy with `mask`'s bit(s) set to `set` (shared helper).
+    #[must_use]
+    const fn with_flag(self, mask: u8, set: bool) -> Self {
+        if set {
+            Self(self.0 | mask)
+        } else {
+            Self(self.0 & !mask)
+        }
+    }
+}
 
 /// All sensor readings bundled for one telemetry update.
 ///
-/// Every field is `Option<_>`; `None` encodes to the field's sentinel value and
-/// decodes back to `None`.
+/// Every sensor field is `Option<_>`; `None` encodes to the field's sentinel value and
+/// decodes back to `None`. The `diagnostics` field is always present.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Telemetry {
@@ -54,6 +114,8 @@ pub struct Telemetry {
     pub wind_dir_deg: Option<f32>,
     /// Battery charge level in percent (0–100).
     pub battery_pct: Option<u8>,
+    /// Per-frame diagnostics bitfield (frame v2).
+    pub diagnostics: Diagnostics,
 }
 
 /// Errors returned by [`Telemetry::decode`].
@@ -78,7 +140,7 @@ impl core::fmt::Display for FrameError {
 impl core::error::Error for FrameError {}
 
 impl Telemetry {
-    /// Returns a [`Telemetry`] with all fields set to `None`.
+    /// Returns a [`Telemetry`] with all sensor fields set to `None` and diagnostics cleared.
     #[must_use]
     pub const fn empty() -> Self {
         Self {
@@ -90,6 +152,7 @@ impl Telemetry {
             wind_speed_ms: None,
             wind_dir_deg: None,
             battery_pct: None,
+            diagnostics: Diagnostics::empty(),
         }
     }
 
@@ -107,7 +170,7 @@ impl Telemetry {
         }
     }
 
-    /// Serialises this reading to the fixed 17-byte v1 wire frame.
+    /// Serialises this reading to the fixed 18-byte v2 wire frame.
     ///
     /// All multi-byte fields are little-endian. `None` fields encode to their
     /// respective sentinels (see module-level table).
@@ -139,11 +202,12 @@ impl Telemetry {
         frame[14..16].copy_from_slice(&dir.to_le_bytes());
 
         frame[16] = self.battery_pct.unwrap_or(0xFF);
+        frame[17] = self.diagnostics.0;
 
         frame
     }
 
-    /// Parses a v1 wire frame, mapping sentinels back to `None`.
+    /// Parses a v2 wire frame, mapping sentinels back to `None`.
     ///
     /// # Errors
     ///
@@ -228,6 +292,8 @@ impl Telemetry {
             Some(bytes[16])
         };
 
+        let diagnostics = Diagnostics(bytes[17]);
+
         Ok(Self {
             temperature_c,
             pressure_hpa,
@@ -237,6 +303,7 @@ impl Telemetry {
             wind_speed_ms,
             wind_dir_deg,
             battery_pct,
+            diagnostics,
         })
     }
 }
@@ -363,7 +430,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn encode_emits_seventeen_bytes_with_version_one() {
+    fn encode_emits_eighteen_bytes_with_version_two() {
         // Given
         let telem = Telemetry::empty();
 
@@ -371,8 +438,8 @@ mod tests {
         let frame = telem.encode();
 
         // Then
-        assert_eq!(frame.len(), 17);
-        assert_eq!(frame[0], 1);
+        assert_eq!(frame.len(), 18);
+        assert_eq!(frame[0], 2);
     }
 
     #[test]
@@ -423,33 +490,55 @@ mod tests {
         assert_eq!(&frame[3..5], &expected_press.to_le_bytes());
     }
 
+    #[test]
+    fn encode_writes_diagnostics_byte() {
+        // Given
+        let telem = Telemetry {
+            diagnostics: Diagnostics(0b0000_0001),
+            ..Telemetry::empty()
+        };
+
+        // When
+        let frame = telem.encode();
+
+        // Then
+        assert_eq!(frame[17], 0x01);
+    }
+
     // -------------------------------------------------------------------------
     // decode
     // -------------------------------------------------------------------------
 
     #[test]
     fn decode_rejects_wrong_length() {
-        // Given
-        let short = [0_u8; 16];
+        // Given — 17 bytes is no longer valid (v2 requires 18)
+        let short17 = [0_u8; 17];
 
         // When
-        let result = Telemetry::decode(&short);
+        let result = Telemetry::decode(&short17);
 
         // Then
-        assert_eq!(result, Err(FrameError::WrongLength(16)));
+        assert_eq!(result, Err(FrameError::WrongLength(17)));
+
+        // Also check 16 bytes
+        let short16 = [0_u8; 16];
+        assert_eq!(
+            Telemetry::decode(&short16),
+            Err(FrameError::WrongLength(16))
+        );
     }
 
     #[test]
     fn decode_rejects_unknown_version() {
-        // Given
-        let mut frame = [0_u8; 17];
-        frame[0] = 2; // unknown version
+        // Given — 18 bytes with version byte = 3 (2 is now valid; 3 is unknown)
+        let mut frame = [0_u8; 18];
+        frame[0] = 3;
 
         // When
         let result = Telemetry::decode(&frame);
 
         // Then
-        assert_eq!(result, Err(FrameError::UnknownVersion(2)));
+        assert_eq!(result, Err(FrameError::UnknownVersion(3)));
     }
 
     #[test]
@@ -470,6 +559,7 @@ mod tests {
         assert_eq!(decoded.wind_speed_ms, None);
         assert_eq!(decoded.wind_dir_deg, None);
         assert_eq!(decoded.battery_pct, None);
+        assert_eq!(decoded.diagnostics, Diagnostics::empty());
 
         Ok(())
     }
@@ -502,6 +592,24 @@ mod tests {
         assert!((decoded.wind_speed_ms.unwrap() - 3.5).abs() < 0.01);
         assert!((decoded.wind_dir_deg.unwrap() - 270.0).abs() < 0.1);
         assert_eq!(decoded.battery_pct, Some(80));
+
+        Ok(())
+    }
+
+    #[test]
+    fn decode_reads_diagnostics_byte_roundtrip() -> TestResult {
+        // Given
+        let telem = Telemetry {
+            diagnostics: Diagnostics::empty().with_occlusion(true),
+            ..Telemetry::empty()
+        };
+
+        // When
+        let frame = telem.encode();
+        let decoded = Telemetry::decode(&frame)?;
+
+        // Then
+        assert!(decoded.diagnostics.occlusion());
 
         Ok(())
     }
@@ -565,6 +673,43 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
+    // Diagnostics type tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn diagnostics_with_occlusion_sets_and_clears_bit0() {
+        // Given / When / Then — setting occlusion
+        assert!(Diagnostics::empty().with_occlusion(true).occlusion());
+
+        // Clearing occlusion
+        assert!(!Diagnostics::empty().with_occlusion(false).occlusion());
+
+        // Round-trip: set then clear
+        let diag = Diagnostics::empty()
+            .with_occlusion(true)
+            .with_occlusion(false);
+        assert!(!diag.occlusion());
+        assert_eq!(diag.0, 0);
+    }
+
+    #[test]
+    fn diagnostics_baro_fault_is_independent_of_occlusion() {
+        // Given — baro fault set, occlusion clear
+        let diag = Diagnostics::empty().with_baro_fault(true);
+
+        // Then
+        assert!(diag.baro_fault());
+        assert!(!diag.occlusion());
+        assert_eq!(diag.0, 0b0000_0010);
+
+        // Given — both set
+        let both = diag.with_occlusion(true);
+        assert!(both.baro_fault());
+        assert!(both.occlusion());
+        assert_eq!(both.0, 0b0000_0011);
+    }
+
+    // -------------------------------------------------------------------------
     // proptest round-trips
     // -------------------------------------------------------------------------
 
@@ -572,7 +717,7 @@ mod tests {
         #[test]
         #[expect(clippy::expect_used, reason = "proptest: inputs are constructed to always succeed")]
         fn roundtrip_decode_encode_is_identity_at_wire_level(
-            // Generate random bytes for a valid v1 frame; force lux to sentinel
+            // Generate random bytes for a valid v2 frame; force lux to sentinel
             // (mantissa = u16::MAX, exponent = 0) so lux is None on both sides.
             // When lux is None, encode always writes exponent=0, so we must use
             // exponent=0 here to get a bit-exact roundtrip.
@@ -589,6 +734,7 @@ mod tests {
             b14 in any::<u8>(),
             b15 in any::<u8>(),
             b16 in any::<u8>(),
+            b17 in any::<u8>(),
         ) {
             let mut bytes = [0_u8; FRAME_LEN];
             bytes[0] = FRAME_VERSION;
@@ -610,14 +756,15 @@ mod tests {
             bytes[14] = b14;
             bytes[15] = b15;
             bytes[16] = b16;
+            bytes[17] = b17;
 
-            let decoded = Telemetry::decode(&bytes).expect("valid v1 frame must decode");
+            let decoded = Telemetry::decode(&bytes).expect("valid v2 frame must decode");
             let re_encoded = decoded.encode();
             prop_assert_eq!(bytes, re_encoded);
         }
 
         #[test]
-        #[expect(clippy::expect_used, reason = "proptest: encode always produces a valid v1 frame")]
+        #[expect(clippy::expect_used, reason = "proptest: encode always produces a valid v2 frame")]
         fn lux_roundtrip_preserves_value_within_tolerance(
             lux in 0.0_f32..=120_000.0_f32,
         ) {
