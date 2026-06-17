@@ -119,19 +119,30 @@ struct ChartSpec {
     color: Color,
 }
 
-/// Render the two time-series charts (temperature and pressure).
+/// Render the three time-series charts (air temperature, sky temperature, pressure).
 fn render_charts(frame: &mut Frame, area: Rect, app: &mut AppState) {
-    let [top, bottom] = Layout::vertical([Constraint::Ratio(1, 2); 2]).areas(area);
+    let [top, middle, bottom] = Layout::vertical([Constraint::Ratio(1, 3); 3]).areas(area);
     render_series_chart(
         frame,
         top,
         &ChartSpec {
-            title: "Temperature",
+            title: "Air temperature",
             unit: "°C",
             prec: 1,
             color: Color::LightRed,
         },
         &mut app.temp,
+    );
+    render_series_chart(
+        frame,
+        middle,
+        &ChartSpec {
+            title: "Sky temperature",
+            unit: "°C",
+            prec: 1,
+            color: Color::LightMagenta,
+        },
+        &mut app.sky,
     );
     render_series_chart(
         frame,
@@ -225,6 +236,7 @@ mod tests {
         let mut app = AppState::new(now);
         let t = meteo_lib::Telemetry {
             temperature_c: Some(22.5),
+            sky_temp_c: Some(-12.0),
             pressure_hpa: Some(1013.25),
             ..meteo_lib::Telemetry::empty()
         };
@@ -259,6 +271,12 @@ mod tests {
         assert!(
             buffer_text.contains("Diagnostics"),
             "buffer should contain 'Diagnostics'; got: {buffer_text:?}"
+        );
+        // The "Sky temperature" chart border title proves the third chart rendered
+        // (the table row is the shorter "Sky temp").
+        assert!(
+            buffer_text.contains("Sky temperature"),
+            "buffer should contain the 'Sky temperature' chart title; got: {buffer_text:?}"
         );
         assert!(
             buffer_text.contains("OK"),

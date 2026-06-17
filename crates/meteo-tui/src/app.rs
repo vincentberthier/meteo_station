@@ -34,6 +34,8 @@ pub struct AppState {
     pub app_version: &'static str,
     /// Rolling temperature time series (seconds since session start, °C).
     pub temp: Series,
+    /// Rolling sky/IR temperature time series (seconds since session start, °C).
+    pub sky: Series,
     /// Rolling pressure time series (seconds since session start, hPa).
     pub pressure: Series,
     /// Session start instant, used to compute relative timestamps.
@@ -51,6 +53,7 @@ impl AppState {
             fw_version: None,
             app_version: env!("CARGO_PKG_VERSION"),
             temp: Series::new(Series::DEFAULT_CAP),
+            sky: Series::new(Series::DEFAULT_CAP),
             pressure: Series::new(Series::DEFAULT_CAP),
             started: now,
         }
@@ -68,12 +71,16 @@ impl AppState {
                 // Telemetry is Copy, so this is a no-op reorder, but kept explicit
                 // for clarity and to be safe if Copy is ever removed.
                 let temp_c = t.temperature_c;
+                let sky_c = t.sky_temp_c;
                 let press_hpa = t.pressure_hpa;
                 self.latest = t;
                 self.last_frame_at = Some(now);
                 let secs = now.duration_since(self.started).as_secs_f64();
                 if let Some(v) = temp_c {
                     self.temp.push(secs, f64::from(v));
+                }
+                if let Some(v) = sky_c {
+                    self.sky.push(secs, f64::from(v));
                 }
                 if let Some(v) = press_hpa {
                     self.pressure.push(secs, f64::from(v));
@@ -118,6 +125,7 @@ mod tests {
         let mut app = AppState::new(base);
         let t = Telemetry {
             temperature_c: Some(22.5),
+            sky_temp_c: Some(-8.0),
             pressure_hpa: Some(1013.0),
             ..Telemetry::empty()
         };
@@ -129,6 +137,7 @@ mod tests {
         assert_eq!(app.latest.temperature_c, Some(22.5));
         assert!(app.last_frame_at.is_some());
         assert_eq!(app.temp.points().len(), 1);
+        assert_eq!(app.sky.points().len(), 1);
         assert_eq!(app.pressure.points().len(), 1);
 
         Ok(())
