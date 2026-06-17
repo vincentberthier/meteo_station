@@ -13,6 +13,7 @@
     reason = "Embassy/esp-rtos executor is single-threaded; Spawner and task futures are !Send by design"
 )]
 
+mod aggregator;
 mod ble;
 mod bmp;
 mod bus;
