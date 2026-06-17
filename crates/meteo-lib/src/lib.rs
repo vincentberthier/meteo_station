@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod aggregate;
 pub mod ble;
 pub mod sensors;
 pub mod utils;
