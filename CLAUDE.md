@@ -5,6 +5,7 @@ Weather station firmware - embedded Rust for a meteorological monitoring device 
 Currently supports:
 
 - BMP388 barometric pressure/temperature sensor (via I2C0)
+- MLX90614 IR thermometer — sky temperature (via I2C0, address `0x5A`, shares GPIO10/11)
 - Status LED on GPIO8
 
 > Ported from the STM32H753ZI (Nucleo-144). The on-chip BLE 5.3 radio replaces the
@@ -88,23 +89,31 @@ crates/
 ├── meteo-firmware/        # Binary crate: ESP32-H2-specific (riscv32imac)
 │   └── src/
 │       ├── main.rs        # esp-hal/esp-rtos init, GPIO8 LED blink, task spawning
-│       ├── bmp.rs         # BMP388 task; reads and logs barometer samples
+│       ├── bmp.rs         # BMP388 task; retries init in loop; bumps BMP_BEAT
+│       ├── mlx.rs         # MLX90614 task; reads sky/ambient IR temps; bumps MLX_BEAT
+│       ├── bus.rs         # Shared I2C0 async-mutex bus; per-sensor I2cDevice handles
+│       ├── aggregator.rs  # Aggregator task: merges BMP + MLX readings into TELEMETRY,
+│       │                  #   publishes a merged frame at 1 Hz; bumps AGG_BEAT
 │       ├── ble.rs         # On-chip BLE stack: controller, manual GATT server,
 │       │                  #   advertise loop, 1 Hz notify (esp-radio + trouble-host)
-│       └── watchdog.rs    # RWDT heartbeat supervisor (watches ADV_BEAT + BLE_BEAT)
+│       └── watchdog.rs    # RWDT heartbeat supervisor (BMP_BEAT, AGG_BEAT, ADV_BEAT,
+│                          #   BLE_BEAT); all four must stay live to feed the watchdog
 ├── meteo-lib/             # Library crate: hardware-agnostic
 │   └── src/
 │       ├── lib.rs         # Re-exports sensor drivers and utilities
 │       ├── utils.rs       # Utility functions (trunc2, etc.)
 │       ├── ble/
-│       │   └── frame.rs   # v1 wire frame: Telemetry, encode/decode, FrameError,
+│       │   └── frame.rs   # v2 wire frame: Telemetry, encode/decode, FrameError,
 │       │                  #   sentinels; host-tested; decode() targets Linux central
 │       └── sensors/
 │           ├── mod.rs     # Sensor module root
-│           └── bmp388.rs  # BMP388 pressure/temperature driver
+│           ├── aggregate.rs # SensorReading enum; sensor-data channel type
+│           ├── bmp388.rs  # BMP388 pressure/temperature driver
+│           └── mlx90614.rs  # MLX90614 IR thermometer driver (SMBus over I2C)
 └── meteo-tui/             # Binary crate: terminal dashboard (host, x86_64-linux)
     └── src/
-        └── main.rs        # ratatui TUI: BLE connect, telemetry subscribe, render
+        └── main.rs        # ratatui TUI: BLE connect, telemetry subscribe, render;
+                           #   diagnostics row (sky-IR occlusion, BMP388 fault bits)
 ```
 
 **Library vs Binary separation:**
@@ -125,7 +134,7 @@ the target, `force-frame-pointers` (for esp-backtrace), and the espflash runner.
 `crates/meteo-tui` is a host-only (`x86_64-unknown-linux-gnu`) `std` binary crate. It
 connects to the `MeteoStation` BLE peripheral via **bluer 0.17** (the official Rust
 BlueZ binding), subscribes to the telemetry notify characteristic, decodes each
-17-byte v1 frame via `meteo-lib::ble::frame::decode`, and renders a live terminal
+18-byte v2 frame via `meteo-lib::ble::frame::decode`, and renders a live terminal
 dashboard with ratatui:
 
 - All 8 frame fields (temperature, pressure, humidity, light, wind speed/direction,
@@ -194,11 +203,11 @@ weather-station wiring). The Nucleo map lives in `datasheets/nucleo_pins.csv`.
 
 Wired and used today:
 
-| Function         | GPIO   | Header / silk | Peripheral | Notes                                  |
-| ---------------- | ------ | ------------- | ---------- | -------------------------------------- |
-| I2C SDA (BMP388) | GPIO10 | J3/4 `10`     | I2C0       | external 4.7 kΩ pull-up to 3V3         |
-| I2C SCL (BMP388) | GPIO11 | J3/5 `11`     | I2C0       | external 4.7 kΩ pull-up to 3V3         |
-| Status LED       | GPIO8  | J3/8 `8`      | GPIO       | external LED + onboard WS2812 (shared) |
+| Function                    | GPIO   | Header / silk | Peripheral | Notes                                      |
+| --------------------------- | ------ | ------------- | ---------- | ------------------------------------------ |
+| I2C SDA (BMP388 + MLX90614) | GPIO10 | J3/4 `10`     | I2C0       | external 4.7 kΩ pull-up to 3V3; shared bus |
+| I2C SCL (BMP388 + MLX90614) | GPIO11 | J3/5 `11`     | I2C0       | external 4.7 kΩ pull-up to 3V3; shared bus |
+| Status LED                  | GPIO8  | J3/8 `8`      | GPIO       | external LED + onboard WS2812 (shared)     |
 
 GPIO8 carries both the onboard addressable WS2812 RGB _and_ the external LED. It is
 driven as a plain push-pull GPIO, so the external LED blinks; the WS2812 needs a
@@ -214,7 +223,7 @@ firmware.
 
 The firmware brings up the on-chip BLE 5.3 radio via **esp-radio** and
 **trouble-host**, advertises as `MeteoStation` (connectable undirected, static
-random address `F0:CA:FE:00:00:01`), and pushes a 17-byte telemetry frame at 1 Hz
+random address `F0:CA:FE:00:00:01`), and pushes an 18-byte telemetry frame at 1 Hz
 over a GATT Notify characteristic.
 
 **GATT layout:**
@@ -225,11 +234,12 @@ over a GATT Notify characteristic.
 | Characteristic | `7e700002-b1df-42a1-bb5f-6a1028c793b0` |
 | Properties     | Read + Notify                          |
 
-The characteristic value is a 17-byte frame: byte[0] is the version sentinel
-(`0x01`), followed by encoded sensor data. Frame encoding and decoding live in
-`meteo-lib::ble::frame` (`Telemetry`, `encode`, `decode`, `FrameError`). The
-`decode()` path is built for a future Linux central; it is not used by the firmware
-itself.
+The characteristic value is an 18-byte frame: byte[0] is the version sentinel
+(`0x02`, FRAME_VERSION 2), bytes 1–16 are the encoded sensor data fields, and byte[17]
+is a diagnostics bitfield (bit 0 = sky-IR occlusion, bit 1 = BMP388 fault, bits 2–7
+reserved). Frame encoding and decoding live in `meteo-lib::ble::frame` (`Telemetry`,
+`encode`, `decode`, `FrameError`). The `decode()` path is built for a future Linux
+central; it is not used by the firmware itself.
 
 **Implementation notes:**
 
@@ -241,8 +251,36 @@ itself.
   depends on `embassy-sync 0.7`; the workspace targets `embassy-sync 0.8`.
   `esp_sync::RawMutex` implements `RawMutex` for both versions, bridging the two.
 - An RWDT heartbeat supervisor (`crates/meteo-firmware/src/watchdog.rs`) watches
-  `ADV_BEAT` (bumped each advertise-loop iteration) and `BLE_BEAT` (bumped each
-  successful notify). If either counter stalls, the RWDT fires and resets the chip.
+  four beats: `BMP_BEAT` (BMP388 sampler alive), `AGG_BEAT` (aggregator alive),
+  `ADV_BEAT` (advertise loop alive), and `BLE_BEAT` (notify sent). All four must
+  stay live to keep feeding the watchdog; a stalled task fires the RWDT and resets
+  the chip. These are **task-liveness** signals — a sensor that fails to read
+  degrades to `None` data without stalling the task, so an absent/failed sensor
+  does not cause an RWDT reboot loop.
+- **Shared I2C0 bus.** BMP388 and MLX90614 share GPIO10/11 via a
+  `embassy_sync::Mutex`-wrapped `I2cBus`; each sensor task holds a per-sensor
+  `I2cDevice` handle from `bus.rs`. The bus is never accessed from two tasks
+  simultaneously.
+- **Aggregator task (`aggregator.rs`).** Each sensor task sends a `SensorReading`
+  variant (defined in `meteo-lib::sensors::aggregate`) over a channel. The
+  aggregator task drains the channel, stores the most-recent reading per sensor in
+  a `TELEMETRY` static, and publishes a merged frame at 1 Hz. This is the only
+  writer of `TELEMETRY`; `ble.rs` reads it to build the notify payload.
+- **Sensor-task resilience.** Each sensor task retries initialisation in its loop
+  on failure (e.g. I2C timeout) and bumps its heartbeat on every iteration
+  regardless of read success. A failing sensor produces `None` fields in the frame
+  rather than stalling the task, so the watchdog stays fed and BLE telemetry
+  continues to flow.
+- **MLX90614 wiring (bare TO-39 chip).** The MLX needs no special firmware
+  sequencing — it powers up in SMBus and shares I2C0 like any other device. The one
+  trap is the bare can's pinout: the datasheet pin table is a **bottom view**
+  (pin 1 SCL → GPIO11, pin 2 SDA → GPIO10, pin 3 VDD → 3V3, pin 4 VSS → GND).
+  Reading it top-down mirrors the can, which shorts SCL to ground and drags the whole
+  bus — observed as `BMP388 I2c(Timeout)` + an RWDT reboot loop the moment the MLX is
+  connected, because _no_ device can clock a grounded SCL. Confirmed by reading the
+  lines as inputs under internal pulls (MCU-as-voltmeter): correct wiring → both lines
+  float high-Z, MLX ACKs at `0x5A`, object temp reads with valid PEC. There is no PWM
+  problem; an earlier "PWM-jam / SCL-low-at-POR" theory was wrong.
 - **Supervision-timeout fix (vendored trouble-host patch).** BlueZ connects with a
   ~420 ms supervision timeout, so the link dropped (`Connection Timeout`, HCI 0x08)
   on any brief central-radio stall. On connect the firmware requests a robust 8 s
@@ -278,9 +316,9 @@ itself.
 
 **Wire frame (`meteo-lib::ble::frame`):**
 
-Host-tested (24/24 tests). The `encode`/`decode` round-trip is verified on the
-development machine via `cargo nextest`. The firmware calls only `encode`; `decode`
-is present for the deferred Linux central.
+Host-tested. The `encode`/`decode` round-trip is verified on the development machine
+via `cargo nextest`. The firmware calls only `encode`; `decode` is present for the
+deferred Linux central.
 
 **Acceptance gate:**
 
@@ -302,7 +340,7 @@ acceptance — the link must hold and repeat over a sustained run.
 
 `ble_notify_check.sh` connects, then subscribes via BlueZ **`AcquireNotify`** (a
 python-dbus reader), captures frames for `WINDOW_SECS` (default 15 s), and asserts
-at least `MIN_FRAMES` (default 5) 17-byte frames with byte[0] == 0x01. It uses
+at least `MIN_FRAMES` (default 5) 18-byte frames with byte[0] == 0x02. It uses
 `AcquireNotify` — **not** bluetoothctl's `notify on` output — because BlueZ only
 re-emits the `Value` property when it _changes_, and the near-constant telemetry
 gets deduped to silence even while notifications flow on-air; `AcquireNotify`
