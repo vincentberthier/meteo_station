@@ -17,6 +17,7 @@ mod aggregator;
 mod ble;
 mod bmp;
 mod bus;
+mod mlx;
 mod watchdog;
 
 use defmt::info;
