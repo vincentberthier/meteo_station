@@ -18,4 +18,9 @@ rustflags = [
 ]
 
 [env]
-DEFMT_LOG = "trace"
+# Compile-time defmt level filter (env_logger syntax; most-specific path wins).
+# Keep trace on our own crates, but cap esp_radio — its NimBLE port layer
+# (ble/npl.rs, compat/*) trace-logs every critical-section enter/exit and HCI
+# event, which floods RTT. warn silences that without losing our logs or the
+# trouble-host/esp-hal trace useful for BLE debugging.
+DEFMT_LOG = "trace,esp_radio=warn"
