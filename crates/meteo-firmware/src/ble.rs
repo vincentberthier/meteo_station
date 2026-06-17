@@ -155,8 +155,8 @@ pub async fn run(controller: Controller) {
         ..
     } = stack.build();
 
-    // Storage buffer for the 17-byte telemetry value; lives for the duration of `run`.
-    let mut telemetry_storage = [0_u8; 17];
+    // Storage buffer for the 18-byte telemetry value; lives for the duration of `run`.
+    let mut telemetry_storage = [0_u8; meteo_lib::FRAME_LEN];
 
     // Build the attribute table (GAP + GATT mandatory services + MeteoService).
     let mut table: AttributeTable<'_, TableMutex, ATT_MAX> = AttributeTable::new();
@@ -170,13 +170,13 @@ pub async fn run(controller: Controller) {
     .expect("GAP config");
 
     // Custom telemetry service with one Notify+Read characteristic.
-    let telemetry_char: Characteristic<[u8; 17]> = {
+    let telemetry_char: Characteristic<[u8; meteo_lib::FRAME_LEN]> = {
         let mut svc = table.add_service(Service::new(SERVICE_UUID));
         let ch = svc
             .add_characteristic(
                 TELEMETRY_UUID,
                 [CharacteristicProp::Read, CharacteristicProp::Notify],
-                [0_u8; 17],
+                [0_u8; meteo_lib::FRAME_LEN],
                 &mut telemetry_storage,
             )
             .build();
@@ -214,7 +214,7 @@ async fn advertise_loop(
     stack: &Stack<'_, Controller, DefaultPacketPool>,
     peripheral: &mut trouble_host::peripheral::Peripheral<'_, Controller, DefaultPacketPool>,
     server: &MeteoServer<'_>,
-    telemetry_char: &Characteristic<[u8; 17]>,
+    telemetry_char: &Characteristic<[u8; meteo_lib::FRAME_LEN]>,
 ) {
     // Build the advertisement + scan-response data once. The 31-byte legacy AD
     // limit cannot hold Flags + the full local name + a 128-bit service UUID
@@ -355,7 +355,7 @@ async fn gatt_events(conn: &trouble_host::gatt::GattConnection<'_, '_, DefaultPa
 /// Heartbeat bumps (substep 5) are deliberately omitted here.
 async fn notify_loop(
     conn: &trouble_host::gatt::GattConnection<'_, '_, DefaultPacketPool>,
-    telemetry_char: &Characteristic<[u8; 17]>,
+    telemetry_char: &Characteristic<[u8; meteo_lib::FRAME_LEN]>,
 ) {
     loop {
         // Latest-wins: no backlog accumulates between 1 Hz samples.
