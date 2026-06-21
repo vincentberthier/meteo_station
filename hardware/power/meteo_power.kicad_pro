@@ -1,0 +1,15 @@
+{
+  "board": {},
+  "boards": [],
+  "meta": {
+    "filename": "meteo_power.kicad_pro",
+    "version": 1
+  },
+  "schematic": {},
+  "sheets": [
+    [
+      "0b1d0c2a-1111-4aaa-8bbb-000000000001",
+      "Root"
+    ]
+  ]
+}

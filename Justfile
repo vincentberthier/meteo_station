@@ -81,3 +81,16 @@ tui-clippy:
 [doc('Audit dependencies for security advisories')]
 audit:
     cargo audit
+
+# --- Hardware recipes ---
+
+# Regenerates the schematic from gen_power_sch.py, checks ERC, and re-exports the
+# PDF/SVG. Needs kicad-cli + the system KiCad symbol libraries. ERC report goes to
+# /tmp to keep the tree clean.
+[doc('Regenerate the power-subsystem KiCad schematic + PDF/SVG')]
+power-sch:
+    python3 hardware/power/gen_power_sch.py hardware/power
+    kicad-cli sch erc -o /tmp/meteo_power-erc.rpt --exit-code-violations hardware/power/meteo_power.kicad_sch
+    kicad-cli sch export pdf -o hardware/power/meteo_power.pdf hardware/power/meteo_power.kicad_sch
+    kicad-cli sch export svg -o /tmp/meteo_power_svg hardware/power/meteo_power.kicad_sch
+    cp /tmp/meteo_power_svg/meteo_power.svg hardware/power/meteo_power.svg
