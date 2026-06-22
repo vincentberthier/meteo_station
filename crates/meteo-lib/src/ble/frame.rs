@@ -24,7 +24,7 @@
 //! | 12–13 | wind speed          | u16 LE    | round(m/s × 100) cm/s                                                       | `u16::MAX`         |
 //! | 14–15 | wind direction      | u16 LE    | round(deg × 10) deci-deg                                                    | `u16::MAX`         |
 //! | 16    | battery             | u8        | percent 0..=100                                                             | `0xFF`             |
-//! | 17    | diagnostics         | u8        | bitfield: bit0 = sky-IR occlusion, bit1 = BMP388 fault, bits 2–7 reserved  | — (always present) |
+//! | 17    | diagnostics         | u8        | bitfield: bit0 = sky-IR occlusion, bit1 = BMP388 fault, bit2 = BME280 fault, bit3 = VEML7700 fault, bit4 = baro divergence, bit5 = MLX90614 fault, bits 6–7 reserved | — (always present) |
 
 /// Wire-format version tag written to byte 0 of every frame.
 pub const FRAME_VERSION: u8 = 2;
@@ -36,8 +36,12 @@ pub const FRAME_LEN: usize = 18;
 ///
 /// Bit 0 = sky-IR sensor ambient diverges from the barometer air temperature
 /// beyond the configured threshold (possible occlusion / icing).
-/// Bit 1 = BMP388 fault (not initialized / read failing). Bits 2–7 are reserved
-/// and always 0.
+/// Bit 1 = BMP388 fault (not initialized / read failing).
+/// Bit 2 = BME280 fault (not initialized / read failing → no humidity or cross-check).
+/// Bit 3 = VEML7700 fault (not initialized / read failing → no luminosity).
+/// Bit 4 = BMP388 vs BME280 temperature/pressure disagree beyond threshold.
+/// Bit 5 = MLX90614 object read failed → no `sky_temp_c`.
+/// Bits 6–7 are reserved and always 0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Diagnostics(pub u8);
@@ -48,7 +52,15 @@ impl Diagnostics {
     /// Bit 1: BMP388 not providing data — failed to initialize, or a read error
     /// forced a re-init. While set, `temperature_c`/`pressure_hpa` are `None`.
     pub const BARO_FAULT: u8 = 1 << 1;
-    // Bits 2–7 reserved (0) for future per-sensor health flags (BME280, VEML7700, MLX).
+    /// Bit 2: BME280 init/read failing → no humidity or cross-check data.
+    pub const BME280_FAULT: u8 = 1 << 2;
+    /// Bit 3: VEML7700 init/read failing → no luminosity data.
+    pub const VEML7700_FAULT: u8 = 1 << 3;
+    /// Bit 4: BMP388 vs BME280 temperature/pressure disagree beyond threshold.
+    pub const BARO_DIVERGENCE: u8 = 1 << 4;
+    /// Bit 5: MLX90614 object read failed → no `sky_temp_c`.
+    pub const MLX90614_FAULT: u8 = 1 << 5;
+    // Bits 6–7 reserved (0).
 
     /// All-clear diagnostics (no flags set).
     #[must_use]
@@ -78,6 +90,54 @@ impl Diagnostics {
     #[must_use]
     pub const fn with_baro_fault(self, set: bool) -> Self {
         self.with_flag(Self::BARO_FAULT, set)
+    }
+
+    /// Returns `true` if the BME280 fault bit is set.
+    #[must_use]
+    pub const fn bme280_fault(self) -> bool {
+        self.0 & Self::BME280_FAULT != 0
+    }
+
+    /// Returns a copy with the BME280 fault bit set to `set`.
+    #[must_use]
+    pub const fn with_bme280_fault(self, set: bool) -> Self {
+        self.with_flag(Self::BME280_FAULT, set)
+    }
+
+    /// Returns `true` if the VEML7700 fault bit is set.
+    #[must_use]
+    pub const fn veml7700_fault(self) -> bool {
+        self.0 & Self::VEML7700_FAULT != 0
+    }
+
+    /// Returns a copy with the VEML7700 fault bit set to `set`.
+    #[must_use]
+    pub const fn with_veml7700_fault(self, set: bool) -> Self {
+        self.with_flag(Self::VEML7700_FAULT, set)
+    }
+
+    /// Returns `true` if the baro divergence bit is set.
+    #[must_use]
+    pub const fn baro_divergence(self) -> bool {
+        self.0 & Self::BARO_DIVERGENCE != 0
+    }
+
+    /// Returns a copy with the baro divergence bit set to `set`.
+    #[must_use]
+    pub const fn with_baro_divergence(self, set: bool) -> Self {
+        self.with_flag(Self::BARO_DIVERGENCE, set)
+    }
+
+    /// Returns `true` if the MLX90614 fault bit is set.
+    #[must_use]
+    pub const fn mlx90614_fault(self) -> bool {
+        self.0 & Self::MLX90614_FAULT != 0
+    }
+
+    /// Returns a copy with the MLX90614 fault bit set to `set`.
+    #[must_use]
+    pub const fn with_mlx90614_fault(self, set: bool) -> Self {
+        self.with_flag(Self::MLX90614_FAULT, set)
     }
 
     /// Returns a copy with `mask`'s bit(s) set to `set` (shared helper).
@@ -707,6 +767,94 @@ mod tests {
         assert!(both.baro_fault());
         assert!(both.occlusion());
         assert_eq!(both.0, 0b0000_0011);
+    }
+
+    #[test]
+    fn diagnostics_new_bits_set_and_clear_independently() {
+        // Given / When / Then — BME280_FAULT (bit 2)
+        let bme280 = Diagnostics::empty().with_bme280_fault(true);
+        assert!(bme280.bme280_fault());
+        assert_eq!(bme280.0, 0b0000_0100);
+        assert!(!bme280.with_bme280_fault(false).bme280_fault());
+        assert_eq!(bme280.with_bme280_fault(false).0, 0b0000_0000);
+
+        // VEML7700_FAULT (bit 3)
+        let veml = Diagnostics::empty().with_veml7700_fault(true);
+        assert!(veml.veml7700_fault());
+        assert_eq!(veml.0, 0b0000_1000);
+        assert!(!veml.with_veml7700_fault(false).veml7700_fault());
+        assert_eq!(veml.with_veml7700_fault(false).0, 0b0000_0000);
+
+        // BARO_DIVERGENCE (bit 4)
+        let baro_div = Diagnostics::empty().with_baro_divergence(true);
+        assert!(baro_div.baro_divergence());
+        assert_eq!(baro_div.0, 0b0001_0000);
+        assert!(!baro_div.with_baro_divergence(false).baro_divergence());
+        assert_eq!(baro_div.with_baro_divergence(false).0, 0b0000_0000);
+
+        // MLX90614_FAULT (bit 5)
+        let mlx = Diagnostics::empty().with_mlx90614_fault(true);
+        assert!(mlx.mlx90614_fault());
+        assert_eq!(mlx.0, 0b0010_0000);
+        assert!(!mlx.with_mlx90614_fault(false).mlx90614_fault());
+        assert_eq!(mlx.with_mlx90614_fault(false).0, 0b0000_0000);
+    }
+
+    #[test]
+    fn diagnostics_all_six_flags_compose() {
+        // Given — set all six flags
+        let diag = Diagnostics::empty()
+            .with_occlusion(true)
+            .with_baro_fault(true)
+            .with_bme280_fault(true)
+            .with_veml7700_fault(true)
+            .with_baro_divergence(true)
+            .with_mlx90614_fault(true);
+
+        // Then — all six accessors return true
+        assert!(diag.occlusion());
+        assert!(diag.baro_fault());
+        assert!(diag.bme280_fault());
+        assert!(diag.veml7700_fault());
+        assert!(diag.baro_divergence());
+        assert!(diag.mlx90614_fault());
+        assert_eq!(diag.0, 0b0011_1111);
+    }
+
+    #[test]
+    fn decode_preserves_new_diagnostic_bits() -> TestResult {
+        // Given — Telemetry with bits 2–5 all set (0b0011_1100)
+        let telem = Telemetry {
+            diagnostics: Diagnostics(0b0011_1100),
+            ..Telemetry::empty()
+        };
+
+        // When
+        let frame = telem.encode();
+        let decoded = Telemetry::decode(&frame)?;
+
+        // Then — each new accessor round-trips correctly
+        assert!(
+            decoded.diagnostics.bme280_fault(),
+            "bit 2 (BME280_FAULT) must survive encode/decode"
+        );
+        assert!(
+            decoded.diagnostics.veml7700_fault(),
+            "bit 3 (VEML7700_FAULT) must survive encode/decode"
+        );
+        assert!(
+            decoded.diagnostics.baro_divergence(),
+            "bit 4 (BARO_DIVERGENCE) must survive encode/decode"
+        );
+        assert!(
+            decoded.diagnostics.mlx90614_fault(),
+            "bit 5 (MLX90614_FAULT) must survive encode/decode"
+        );
+        // Bits 0 and 1 must be clear
+        assert!(!decoded.diagnostics.occlusion(), "bit 0 must be clear");
+        assert!(!decoded.diagnostics.baro_fault(), "bit 1 must be clear");
+
+        Ok(())
     }
 
     // -------------------------------------------------------------------------
