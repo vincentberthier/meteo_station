@@ -143,6 +143,18 @@ pub fn fmt_diagnostics(diag: Diagnostics) -> String {
     if diag.baro_fault() {
         flags.push("BMP388 fault");
     }
+    if diag.bme280_fault() {
+        flags.push("BME280 fault");
+    }
+    if diag.veml7700_fault() {
+        flags.push("VEML7700 fault");
+    }
+    if diag.baro_divergence() {
+        flags.push("baro divergence");
+    }
+    if diag.mlx90614_fault() {
+        flags.push("MLX90614 fault");
+    }
     if flags.is_empty() {
         "OK".to_owned()
     } else {
@@ -479,6 +491,68 @@ mod tests {
 
         // Then — occlusion first, then baro fault, comma-separated
         assert_eq!(result, "sky occluded, BMP388 fault");
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_diagnostics_bme280_fault_only() -> TestResult {
+        // Given / When
+        let result = fmt_diagnostics(Diagnostics::empty().with_bme280_fault(true));
+
+        // Then
+        assert_eq!(result, "BME280 fault");
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_diagnostics_veml7700_fault_only() -> TestResult {
+        // Given / When
+        let result = fmt_diagnostics(Diagnostics::empty().with_veml7700_fault(true));
+
+        // Then
+        assert_eq!(result, "VEML7700 fault");
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_diagnostics_baro_divergence_only() -> TestResult {
+        // Given / When
+        let result = fmt_diagnostics(Diagnostics::empty().with_baro_divergence(true));
+
+        // Then
+        assert_eq!(result, "baro divergence");
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_diagnostics_mlx_fault_only() -> TestResult {
+        // Given / When
+        let result = fmt_diagnostics(Diagnostics::empty().with_mlx90614_fault(true));
+
+        // Then
+        assert_eq!(result, "MLX90614 fault");
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_diagnostics_all_flags_joined_in_bit_order() -> TestResult {
+        // Given — all six flags set
+        let diag = Diagnostics::empty()
+            .with_occlusion(true)
+            .with_baro_fault(true)
+            .with_bme280_fault(true)
+            .with_veml7700_fault(true)
+            .with_baro_divergence(true)
+            .with_mlx90614_fault(true);
+
+        // When
+        let result = fmt_diagnostics(diag);
+
+        // Then — labels appear in bit order (0→5)
+        assert_eq!(
+            result,
+            "sky occluded, BMP388 fault, BME280 fault, VEML7700 fault, baro divergence, MLX90614 fault"
+        );
         Ok(())
     }
 
