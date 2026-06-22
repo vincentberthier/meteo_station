@@ -95,7 +95,7 @@ async fn main(spawner: Spawner) {
     // BMP388 + MLX90614 + BME280 + VEML7700 on I2C0: SDA = GPIO10 (J3/4), SCL = GPIO11
     // (J3/5). External 4.7 kΩ pull-ups to 3V3 on the bus. The shared async mutex lets
     // each sensor task hold the bus for one transaction at a time.
-    let i2c = I2c::new(
+    let mut i2c = I2c::new(
         peripherals.I2C0,
         I2cConfig::default().with_frequency(Rate::from_khz(100)),
     )
@@ -103,6 +103,16 @@ async fn main(spawner: Spawner) {
     .with_sda(peripherals.GPIO10)
     .with_scl(peripherals.GPIO11)
     .into_async();
+
+    // One-shot I2C bus scan at boot: enumerate every device that ACKs so the log
+    // shows what is physically wired before the sensor tasks take the bus. Expected
+    // today: 0x10 VEML7700, 0x5A MLX90614, 0x76 BME280, 0x77 BMP388.
+    let found = meteo_lib::i2c_scan::scan(&mut i2c).await;
+    info!("I2C scan: {} device(s) responding", found.len());
+    for &addr in &found {
+        info!("  I2C device @ {=u8:#04x}", addr);
+    }
+
     let bus: &'static Mutex<_, _> = I2C_BUS.init(Mutex::new(i2c));
 
     // Aggregator owns TELEMETRY; spawn it before the sensor tasks so the channel drains.

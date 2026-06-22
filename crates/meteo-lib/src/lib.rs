@@ -2,6 +2,7 @@
 
 pub mod aggregate;
 pub mod ble;
+pub mod i2c_scan;
 pub mod sensors;
 pub mod utils;
 
