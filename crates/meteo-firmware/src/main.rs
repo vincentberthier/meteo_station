@@ -15,9 +15,11 @@
 
 mod aggregator;
 mod ble;
+mod bme;
 mod bmp;
 mod bus;
 mod mlx;
+mod veml;
 mod watchdog;
 
 use defmt::info;
@@ -42,12 +44,17 @@ use crate::bus::{I2C_BUS, SharedI2c};
 // the image to boot it.
 esp_bootloader_esp_idf::esp_app_desc!();
 
-/// BMP388 I2C address (SDO tied high). The shared bus also leaves 0x76 free for a
-/// future BME280.
+/// BMP388 I2C address (SDO tied high). 0x76 is the BME280 on the same bus.
 const BMP388_ADDR: u8 = 0x77;
 
 /// MLX90614 I2C address (factory default; not remapped in EEPROM).
 const MLX90614_ADDR: u8 = 0x5A;
+
+/// BME280 I2C address (SDO → GND). 0x77 is the BMP388.
+const BME280_ADDR: u8 = 0x76;
+
+/// VEML7700 fixed I2C address (not configurable).
+const VEML7700_ADDR: u8 = 0x10;
 
 /// Thin `'static`-spawnable wrapper for the BLE task.
 #[embassy_executor::task]
@@ -85,9 +92,9 @@ async fn main(spawner: Spawner) {
     let controller: ble::Controller = trouble_host::prelude::ExternalController::new(connector);
     spawner.spawn(ble_task(controller).expect("ble_task already spawned"));
 
-    // BMP388 + MLX90614 on I2C0: SDA = GPIO10 (J3/4), SCL = GPIO11 (J3/5). External
-    // 4.7 kΩ pull-ups to 3V3 on the bus. The shared async mutex lets both sensor tasks
-    // hold the bus for one transaction at a time.
+    // BMP388 + MLX90614 + BME280 + VEML7700 on I2C0: SDA = GPIO10 (J3/4), SCL = GPIO11
+    // (J3/5). External 4.7 kΩ pull-ups to 3V3 on the bus. The shared async mutex lets
+    // each sensor task hold the bus for one transaction at a time.
     let i2c = I2c::new(
         peripherals.I2C0,
         I2cConfig::default().with_frequency(Rate::from_khz(100)),
@@ -105,6 +112,12 @@ async fn main(spawner: Spawner) {
         .spawn(bmp::read_barometer(bmp_i2c, BMP388_ADDR).expect("read_barometer already spawned"));
     let mlx_i2c: SharedI2c = I2cDevice::new(bus);
     spawner.spawn(mlx::read_sky(mlx_i2c, MLX90614_ADDR).expect("read_sky already spawned"));
+    let bme_i2c: SharedI2c = I2cDevice::new(bus);
+    spawner.spawn(bme::read_humidity(bme_i2c, BME280_ADDR).expect("read_humidity already spawned"));
+    let veml_i2c: SharedI2c = I2cDevice::new(bus);
+    spawner.spawn(
+        veml::read_luminosity(veml_i2c, VEML7700_ADDR).expect("read_luminosity already spawned"),
+    );
 
     // Status LED on GPIO8 (the external LED + the onboard WS2812 share this line).
     // Driven as a plain GPIO: the external LED blinks; the WS2812 stays dark since a
