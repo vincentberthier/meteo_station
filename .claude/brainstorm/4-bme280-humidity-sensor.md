@@ -3,7 +3,12 @@
 - **ID:** 4
 - **Category:** Feature
 - **Date:** 2026-06-17
-- **Status:** Active
+- **Status:** Superseded by #6 (2026-06-23)
+
+> **Superseded.** The aggregator + shared-bus refactor this brainstorm proposed
+> is now built, and the BME280 role decision changed from _humidity-only_ to
+> _cross-check both_ once the breakout arrived (alongside the VEML7700). See
+> `6-bme280-veml7700-firmware.md` for the current scope and decisions.
 
 ## Context
 
