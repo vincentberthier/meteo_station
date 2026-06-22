@@ -7,11 +7,13 @@ built on the [Embassy](https://embassy.dev) async runtime over esp-hal + esp-rto
 ## Workspace layout
 
 - `crates/meteo-firmware` — ESP32-H2 binary: esp-hal/esp-rtos init, GPIO8 status
-  LED, Embassy tasks (BMP388 + MLX90614 on a shared I2C bus, aggregator, on-chip
-  BLE, RWDT watchdog). esp deps are gated to `cfg(target_arch = "riscv32")`.
+  LED, Embassy tasks (BMP388 + MLX90614 + BME280 + VEML7700 on a shared I2C bus,
+  aggregator, on-chip BLE, RWDT watchdog). esp deps are gated to
+  `cfg(target_arch = "riscv32")`.
 - `crates/meteo-lib` — hardware-agnostic drivers (host-testable) using
-  `embedded-hal-async` traits: BMP388 barometer, MLX90614 IR thermometer, and the
-  v2 BLE wire-frame (encode/decode + diagnostics byte).
+  `embedded-hal-async` traits: BMP388 barometer, MLX90614 IR thermometer, BME280
+  humidity sensor, VEML7700 ambient light sensor, and the v2 BLE wire-frame
+  (encode/decode + diagnostics byte).
 - `crates/meteo-tui` — terminal dashboard (host, `x86_64-linux`): connects to the
   station over BLE, decodes telemetry frames, and renders a live ratatui UI
   (telemetry table + air-temp / sky-temp / pressure charts).

@@ -4,8 +4,10 @@ Weather station firmware - embedded Rust for a meteorological monitoring device 
 
 Currently supports:
 
-- BMP388 barometric pressure/temperature sensor (via I2C0)
+- BMP388 barometric pressure/temperature sensor (via I2C0, address `0x77`)
 - MLX90614 IR thermometer — sky temperature (via I2C0, address `0x5A`, shares GPIO10/11)
+- BME280 humidity/pressure/temperature sensor (via I2C0, address `0x76`, shares GPIO10/11)
+- VEML7700 ambient light sensor — luminosity in lux (via I2C0, address `0x10`, shares GPIO10/11)
 - Status LED on GPIO8
 
 > Ported from the STM32H753ZI (Nucleo-144). The on-chip BLE 5.3 radio replaces the
@@ -92,6 +94,9 @@ crates/
 │       ├── bmp.rs         # BMP388 task; retries init in loop; bumps BMP_BEAT
 │       ├── mlx.rs         # MLX90614 task; reads sky/ambient IR temps, sends on the
 │       │                  #   sensor channel (not watchdog-gated; see resilience note)
+│       ├── bme.rs         # BME280 task; 1 Hz humidity reads; graceful degradation,
+│       │                  #   no watchdog beat
+│       ├── veml.rs        # VEML7700 task; auto-ranging lux; no watchdog beat
 │       ├── bus.rs         # Shared I2C0 async-mutex bus; per-sensor I2cDevice handles
 │       ├── aggregator.rs  # Aggregator task: merges BMP + MLX readings into TELEMETRY,
 │       │                  #   publishes a merged frame at 1 Hz; bumps AGG_BEAT
@@ -110,7 +115,9 @@ crates/
 │           ├── mod.rs     # Sensor module root
 │           ├── aggregate.rs # SensorReading enum; sensor-data channel type
 │           ├── bmp388.rs  # BMP388 pressure/temperature driver
-│           └── mlx90614.rs  # MLX90614 IR thermometer driver (SMBus over I2C)
+│           ├── mlx90614.rs  # MLX90614 IR thermometer driver (SMBus over I2C)
+│           ├── bme280.rs  # BME280 humidity/pressure/temp driver (float compensation)
+│           └── veml7700.rs  # VEML7700 ambient light driver (auto-ranging lux)
 └── meteo-tui/             # Binary crate: terminal dashboard (host, x86_64-linux)
     └── src/
         └── main.rs        # ratatui TUI: BLE connect, telemetry subscribe, render;
@@ -204,11 +211,11 @@ weather-station wiring). The Nucleo map lives in `datasheets/nucleo_pins.csv`.
 
 Wired and used today:
 
-| Function                    | GPIO   | Header / silk | Peripheral | Notes                                      |
-| --------------------------- | ------ | ------------- | ---------- | ------------------------------------------ |
-| I2C SDA (BMP388 + MLX90614) | GPIO10 | J3/4 `10`     | I2C0       | external 4.7 kΩ pull-up to 3V3; shared bus |
-| I2C SCL (BMP388 + MLX90614) | GPIO11 | J3/5 `11`     | I2C0       | external 4.7 kΩ pull-up to 3V3; shared bus |
-| Status LED                  | GPIO8  | J3/8 `8`      | GPIO       | external LED + onboard WS2812 (shared)     |
+| Function                                        | GPIO   | Header / silk | Peripheral | Notes                                      |
+| ----------------------------------------------- | ------ | ------------- | ---------- | ------------------------------------------ |
+| I2C SDA (BMP388 + MLX90614 + BME280 + VEML7700) | GPIO10 | J3/4 `10`     | I2C0       | external 4.7 kΩ pull-up to 3V3; shared bus |
+| I2C SCL (BMP388 + MLX90614 + BME280 + VEML7700) | GPIO11 | J3/5 `11`     | I2C0       | external 4.7 kΩ pull-up to 3V3; shared bus |
+| Status LED                                      | GPIO8  | J3/8 `8`      | GPIO       | external LED + onboard WS2812 (shared)     |
 
 GPIO8 carries both the onboard addressable WS2812 RGB _and_ the external LED. It is
 driven as a plain push-pull GPIO, so the external LED blinks; the WS2812 needs a
@@ -236,9 +243,19 @@ over a GATT Notify characteristic.
 | Properties     | Read + Notify                          |
 
 The characteristic value is an 18-byte frame: byte[0] is the version sentinel
-(`0x02`, FRAME_VERSION 2), bytes 1–16 are the encoded sensor data fields, and byte[17]
-is a diagnostics bitfield (bit 0 = sky-IR occlusion, bit 1 = BMP388 fault, bits 2–7
-reserved). Frame encoding and decoding live in `meteo-lib::ble::frame` (`Telemetry`,
+(`0x02`, FRAME_VERSION 2), bytes 1–16 are the encoded sensor data fields
+(`humidity_pct` and `luminosity_lux` are existing fields in this range), and byte[17]
+is a diagnostics bitfield:
+
+- bit 0 = sky-IR occlusion (MLX90614 sky temp too close to ambient)
+- bit 1 = BMP388 fault
+- bit 2 = BME280 fault
+- bit 3 = VEML7700 fault
+- bit 4 = baro divergence (BMP388 vs BME280 temp/pressure disagree beyond threshold)
+- bit 5 = MLX90614 fault
+- bits 6–7 reserved
+
+Frame encoding and decoding live in `meteo-lib::ble::frame` (`Telemetry`,
 `encode`, `decode`, `FrameError`). The `decode()` path is built for a future Linux
 central; it is not used by the firmware itself.
 
@@ -258,10 +275,10 @@ central; it is not used by the firmware itself.
   the chip. These are **task-liveness** signals — a sensor that fails to read
   degrades to `None` data without stalling the task, so an absent/failed sensor
   does not cause an RWDT reboot loop.
-- **Shared I2C0 bus.** BMP388 and MLX90614 share GPIO10/11 via a
-  `embassy_sync::Mutex`-wrapped `I2cBus`; each sensor task holds a per-sensor
-  `I2cDevice` handle from `bus.rs`. The bus is never accessed from two tasks
-  simultaneously.
+- **Shared I2C0 bus.** BMP388 (0x77), MLX90614 (0x5A), BME280 (0x76), and VEML7700
+  (0x10) all share GPIO10/11 via a `embassy_sync::Mutex`-wrapped `I2cBus`; each
+  sensor task holds a per-sensor `I2cDevice` handle from `bus.rs`. The bus is never
+  accessed from two tasks simultaneously.
 - **Aggregator task (`aggregator.rs`).** Each sensor task sends a `SensorReading`
   variant (defined in `meteo-lib::sensors::aggregate`) over a channel. The
   aggregator task drains the channel, stores the most-recent reading per sensor in
