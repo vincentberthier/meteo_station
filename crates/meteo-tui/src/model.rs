@@ -256,14 +256,24 @@ impl Series {
 /// For a zero-width range (`min == max`) the bounds open to `±1.0`; otherwise a
 /// 5 % margin is added on each side. Returns `[lo, hi]` (with `lo < hi`), shaped
 /// to feed ratatui's `Axis::bounds` directly.
+///
+/// `floor` clamps the lower bound for physically non-negative metrics
+/// (e.g. luminosity, humidity): pass `Some(0.0)` so the padding can never render
+/// an unphysical negative axis label. Metrics that legitimately go negative
+/// (temperature) pass `None`. The clamp only ever raises `lo`, so `lo < hi`
+/// holds as long as `hi` exceeds the floor (always true for real data).
 #[must_use]
-pub fn padded_value_bounds(min: f64, max: f64) -> [f64; 2] {
+pub fn padded_value_bounds(min: f64, max: f64, floor: Option<f64>) -> [f64; 2] {
     let span = max - min;
-    if span.abs() < f64::EPSILON {
+    let [lo, hi] = if span.abs() < f64::EPSILON {
         [min - 1.0, max + 1.0]
     } else {
         let margin = span * 0.05;
         [min - margin, max + margin]
+    };
+    match floor {
+        Some(f) if lo < f => [f, hi],
+        _ => [lo, hi],
     }
 }
 
@@ -662,7 +672,7 @@ mod tests {
     fn padded_value_bounds_equal_expands() -> TestResult {
         // Given a degenerate (single-value) range
         // When
-        let [lo, hi] = padded_value_bounds(5.0, 5.0);
+        let [lo, hi] = padded_value_bounds(5.0, 5.0, None);
 
         // Then — opens to ±1 so the flat line stays visible
         assert!(lo < 5.0, "lo should drop below the value");
@@ -676,11 +686,39 @@ mod tests {
     fn padded_value_bounds_range_adds_margin() -> TestResult {
         // Given a non-degenerate range
         // When
-        let [lo, hi] = padded_value_bounds(0.0, 10.0);
+        let [lo, hi] = padded_value_bounds(0.0, 10.0, None);
 
         // Then — 5 % margin each side
         assert!((lo - -0.5).abs() < f64::EPSILON, "lo should be -0.5");
         assert!((hi - 10.5).abs() < f64::EPSILON, "hi should be 10.5");
+        Ok(())
+    }
+
+    #[test]
+    fn padded_value_bounds_floor_clamps_negative_lower_bound() -> TestResult {
+        // Given a spike-over-low-baseline range whose 5 % margin would push the
+        // padded lower bound below zero (the negative-lux case)
+        // When a zero floor is applied
+        let [lo, hi] = padded_value_bounds(2.0, 3426.0, Some(0.0));
+
+        // Then — lower bound is clamped to 0, upper bound keeps its margin
+        assert!((lo - 0.0).abs() < f64::EPSILON, "lo should clamp to 0.0");
+        assert!(hi > 3426.0, "hi should keep its upper margin");
+        Ok(())
+    }
+
+    #[test]
+    fn padded_value_bounds_floor_leaves_positive_lower_bound() -> TestResult {
+        // Given a range already well above the floor
+        // When a zero floor is applied
+        let [lo, hi] = padded_value_bounds(100.0, 200.0, Some(0.0));
+
+        // Then — the floor does not raise an already-positive lower bound
+        assert!(
+            (lo - 95.0).abs() < f64::EPSILON,
+            "lo should keep its margin (95.0)"
+        );
+        assert!((hi - 205.0).abs() < f64::EPSILON, "hi should be 205.0");
         Ok(())
     }
 

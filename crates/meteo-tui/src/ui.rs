@@ -117,6 +117,9 @@ struct ChartSpec {
     prec: usize,
     /// Plot-line colour.
     color: Color,
+    /// Lower y-axis clamp for physically non-negative metrics (`Some(0.0)` for
+    /// luminosity); `None` for metrics that may go negative (temperature).
+    floor: Option<f64>,
 }
 
 /// Render the four time-series charts (air temperature, sky temperature,
@@ -131,6 +134,7 @@ fn render_charts(frame: &mut Frame, area: Rect, app: &mut AppState) {
             unit: "°C",
             prec: 1,
             color: Color::LightRed,
+            floor: None,
         },
         &mut app.temp,
     );
@@ -142,6 +146,7 @@ fn render_charts(frame: &mut Frame, area: Rect, app: &mut AppState) {
             unit: "°C",
             prec: 1,
             color: Color::LightMagenta,
+            floor: None,
         },
         &mut app.sky,
     );
@@ -153,6 +158,7 @@ fn render_charts(frame: &mut Frame, area: Rect, app: &mut AppState) {
             unit: "hPa",
             prec: 1,
             color: Color::LightCyan,
+            floor: None,
         },
         &mut app.pressure,
     );
@@ -164,6 +170,7 @@ fn render_charts(frame: &mut Frame, area: Rect, app: &mut AppState) {
             unit: "lux",
             prec: 0,
             color: Color::LightYellow,
+            floor: Some(0.0),
         },
         &mut app.lux,
     );
@@ -185,7 +192,7 @@ fn render_series_chart(frame: &mut Frame, area: Rect, spec: &ChartSpec, series: 
         return;
     };
     // `x_win` and `y_win` are `[f64; 2]`, feeding `Axis::bounds` directly.
-    let y_win = model::padded_value_bounds(y_raw.0, y_raw.1);
+    let y_win = model::padded_value_bounds(y_raw.0, y_raw.1, spec.floor);
     let y_labels = model::value_axis_labels(y_win, spec.prec);
 
     let data = series.points();
