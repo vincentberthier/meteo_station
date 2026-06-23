@@ -119,12 +119,13 @@ struct ChartSpec {
     color: Color,
 }
 
-/// Render the three time-series charts (air temperature, sky temperature, pressure).
+/// Render the four time-series charts (air temperature, sky temperature,
+/// pressure, luminosity).
 fn render_charts(frame: &mut Frame, area: Rect, app: &mut AppState) {
-    let [top, middle, bottom] = Layout::vertical([Constraint::Ratio(1, 3); 3]).areas(area);
+    let [air, sky, pressure, lux] = Layout::vertical([Constraint::Ratio(1, 4); 4]).areas(area);
     render_series_chart(
         frame,
-        top,
+        air,
         &ChartSpec {
             title: "Air temperature",
             unit: "°C",
@@ -135,7 +136,7 @@ fn render_charts(frame: &mut Frame, area: Rect, app: &mut AppState) {
     );
     render_series_chart(
         frame,
-        middle,
+        sky,
         &ChartSpec {
             title: "Sky temperature",
             unit: "°C",
@@ -146,7 +147,7 @@ fn render_charts(frame: &mut Frame, area: Rect, app: &mut AppState) {
     );
     render_series_chart(
         frame,
-        bottom,
+        pressure,
         &ChartSpec {
             title: "Pressure",
             unit: "hPa",
@@ -154,6 +155,17 @@ fn render_charts(frame: &mut Frame, area: Rect, app: &mut AppState) {
             color: Color::LightCyan,
         },
         &mut app.pressure,
+    );
+    render_series_chart(
+        frame,
+        lux,
+        &ChartSpec {
+            title: "Luminosity",
+            unit: "lux",
+            prec: 0,
+            color: Color::LightYellow,
+        },
+        &mut app.lux,
     );
 }
 

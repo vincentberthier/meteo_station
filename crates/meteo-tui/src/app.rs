@@ -38,6 +38,8 @@ pub struct AppState {
     pub sky: Series,
     /// Rolling pressure time series (seconds since session start, hPa).
     pub pressure: Series,
+    /// Rolling luminosity time series (seconds since session start, lux).
+    pub lux: Series,
     /// Session start instant, used to compute relative timestamps.
     started: Instant,
 }
@@ -55,6 +57,7 @@ impl AppState {
             temp: Series::new(Series::DEFAULT_CAP),
             sky: Series::new(Series::DEFAULT_CAP),
             pressure: Series::new(Series::DEFAULT_CAP),
+            lux: Series::new(Series::DEFAULT_CAP),
             started: now,
         }
     }
@@ -73,6 +76,7 @@ impl AppState {
                 let temp_c = t.temperature_c;
                 let sky_c = t.sky_temp_c;
                 let press_hpa = t.pressure_hpa;
+                let lux = t.luminosity_lux;
                 self.latest = t;
                 self.last_frame_at = Some(now);
                 let secs = now.duration_since(self.started).as_secs_f64();
@@ -84,6 +88,9 @@ impl AppState {
                 }
                 if let Some(v) = press_hpa {
                     self.pressure.push(secs, f64::from(v));
+                }
+                if let Some(v) = lux {
+                    self.lux.push(secs, f64::from(v));
                 }
             }
         }
@@ -127,6 +134,7 @@ mod tests {
             temperature_c: Some(22.5),
             sky_temp_c: Some(-8.0),
             pressure_hpa: Some(1013.0),
+            luminosity_lux: Some(1200.0),
             ..Telemetry::empty()
         };
 
@@ -139,6 +147,7 @@ mod tests {
         assert_eq!(app.temp.points().len(), 1);
         assert_eq!(app.sky.points().len(), 1);
         assert_eq!(app.pressure.points().len(), 1);
+        assert_eq!(app.lux.points().len(), 1);
 
         Ok(())
     }
@@ -151,6 +160,7 @@ mod tests {
         let t = Telemetry {
             temperature_c: Some(22.5),
             pressure_hpa: None,
+            luminosity_lux: None,
             ..Telemetry::empty()
         };
 
@@ -159,6 +169,7 @@ mod tests {
 
         // Then
         assert!(app.pressure.is_empty());
+        assert!(app.lux.is_empty());
         assert_eq!(app.temp.points().len(), 1);
 
         Ok(())
