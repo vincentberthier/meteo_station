@@ -42,6 +42,14 @@ run: build
 reset:
     espflash reset
 
+# Bench tool: identify the live conductor pair of a weather-meter RJ11 cable
+# hands-free. Wire cable conductors to GPIO0/3/4/5, actuate the sensor, watch the
+# log print the live pair. See crates/meteo-firmware/src/bin/probe.rs.
+[doc('Flash + monitor the RJ11 live-pair probe')]
+probe:
+    cargo build --release -p meteo-firmware --bin probe
+    espflash flash --monitor --chip {{ chip }} --log-format defmt target/{{ target }}/release/probe
+
 # --- Code quality recipes ---
 
 [doc('Format code')]
