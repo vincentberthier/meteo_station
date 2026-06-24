@@ -21,6 +21,14 @@ pub async fn read_humidity(i2c: SharedI2c, address: u8) {
     // copy (it just holds the `&'static Mutex` bus ref), so each (re)init attempt gets
     // a fresh handle while the task keeps the original for the next retry.
     let mut sensor: Option<Bme280<SharedI2c>> = None;
+    // Whether we've already logged the current fault. Logging is edge-gated: one
+    // WARN when the sensor goes from working to absent/failing, one INFO when it
+    // comes back. The retry itself keeps running silently every cycle — a single
+    // NAKing I2C probe per second is cheap and lets a real BME280 self-heal if one
+    // is ever plugged in — but it never spams the log (retrying 1000× changes
+    // nothing). The bench part is usually a mis-ordered BMP280, which has no
+    // humidity and never ACKs at 0x76 here.
+    let mut faulted = false;
 
     loop {
         // (Re)initialize on demand: covers a slow/absent sensor at boot and a bus
@@ -30,8 +38,17 @@ pub async fn read_humidity(i2c: SharedI2c, address: u8) {
                 Ok(s) => {
                     info!("BME280 initialized successfully!");
                     sensor = Some(s);
+                    faulted = false;
                 }
-                Err(e) => warn!("BME280 init failed, retrying: {:?}", Debug2Format(&e)),
+                Err(e) => {
+                    if !faulted {
+                        warn!(
+                            "BME280 not responding (absent or mis-ordered BMP280?); retrying silently: {:?}",
+                            Debug2Format(&e)
+                        );
+                        faulted = true;
+                    }
+                }
             }
         }
 
@@ -54,11 +71,14 @@ pub async fn read_humidity(i2c: SharedI2c, address: u8) {
                 }
                 Err(e) => {
                     // Drop the driver and re-init next cycle so a transient bus fault
-                    // self-heals rather than wedging on a stale handle.
-                    warn!(
-                        "BME280 read failed, re-initializing: {:?}",
-                        Debug2Format(&e)
-                    );
+                    // self-heals rather than wedging on a stale handle. Edge-gated WARN.
+                    if !faulted {
+                        warn!(
+                            "BME280 read failed, re-initializing: {:?}",
+                            Debug2Format(&e)
+                        );
+                        faulted = true;
+                    }
                     sensor = None;
                 }
             }
