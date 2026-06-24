@@ -97,6 +97,9 @@ crates/
 │       ├── bme.rs         # BME280 task; 1 Hz humidity reads; graceful degradation,
 │       │                  #   no watchdog beat
 │       ├── veml.rs        # VEML7700 task; auto-ranging lux; no watchdog beat
+│       ├── anemometer.rs  # Anemometer task; GPIO22 pulse count → wind speed; no beat
+│       ├── rain.rs        # Rain-gauge task; GPIO12 tip count → mm/h rate; no beat
+│       ├── vane.rs        # Wind-vane task; GPIO1/ADC1 divider → heading; no beat
 │       ├── bus.rs         # Shared I2C0 async-mutex bus; per-sensor I2cDevice handles
 │       ├── aggregator.rs  # Aggregator task: merges BMP + MLX readings into TELEMETRY,
 │       │                  #   publishes a merged frame at 1 Hz; bumps AGG_BEAT
@@ -109,7 +112,7 @@ crates/
 │       ├── lib.rs         # Re-exports sensor drivers and utilities
 │       ├── utils.rs       # Utility functions (trunc2, etc.)
 │       ├── ble/
-│       │   └── frame.rs   # v2 wire frame: Telemetry, encode/decode, FrameError,
+│       │   └── frame.rs   # v3 wire frame: Telemetry, encode/decode, FrameError,
 │       │                  #   sentinels; host-tested; decode() targets Linux central
 │       └── sensors/
 │           ├── mod.rs     # Sensor module root
@@ -117,7 +120,8 @@ crates/
 │           ├── bmp388.rs  # BMP388 pressure/temperature driver
 │           ├── mlx90614.rs  # MLX90614 IR thermometer driver (SMBus over I2C)
 │           ├── bme280.rs  # BME280 humidity/pressure/temp driver (float compensation)
-│           └── veml7700.rs  # VEML7700 ambient light driver (auto-ranging lux)
+│           ├── veml7700.rs  # VEML7700 ambient light driver (auto-ranging lux)
+│           └── weather_meter.rs # SEN-15901 conversions: wind speed/dir, rain rate
 └── meteo-tui/             # Binary crate: terminal dashboard (host, x86_64-linux)
     └── src/
         └── main.rs        # ratatui TUI: BLE connect, telemetry subscribe, render;
@@ -142,11 +146,12 @@ the target, `force-frame-pointers` (for esp-backtrace), and the espflash runner.
 `crates/meteo-tui` is a host-only (`x86_64-unknown-linux-gnu`) `std` binary crate. It
 connects to the `MeteoStation` BLE peripheral via **bluer 0.17** (the official Rust
 BlueZ binding), subscribes to the telemetry notify characteristic, decodes each
-18-byte v2 frame via `meteo-lib::ble::frame::decode`, and renders a live terminal
+20-byte v3 frame via `meteo-lib::ble::frame::decode`, and renders a live terminal
 dashboard with ratatui:
 
-- All 8 frame fields (air temperature, pressure, humidity, sky/IR temperature,
-  luminosity, wind speed/direction, battery) plus the diagnostics row.
+- All frame fields (air temperature, pressure, humidity, sky/IR temperature,
+  luminosity, wind speed + direction shown together with a compass label, rain
+  rate, battery) plus the diagnostics row.
 - Live scrolling air-temperature, sky-temperature, and pressure mini-charts.
 - Header bar: wall clock, app version, firmware version (read from DIS), connection
   status.
@@ -231,7 +236,7 @@ firmware.
 
 The firmware brings up the on-chip BLE 5.3 radio via **esp-radio** and
 **trouble-host**, advertises as `MeteoStation` (connectable undirected, static
-random address `F0:CA:FE:00:00:01`), and pushes an 18-byte telemetry frame at 1 Hz
+random address `F0:CA:FE:00:00:01`), and pushes a 20-byte telemetry frame at 1 Hz
 over a GATT Notify characteristic.
 
 **GATT layout:**
@@ -242,9 +247,10 @@ over a GATT Notify characteristic.
 | Characteristic | `7e700002-b1df-42a1-bb5f-6a1028c793b0` |
 | Properties     | Read + Notify                          |
 
-The characteristic value is an 18-byte frame: byte[0] is the version sentinel
-(`0x02`, FRAME_VERSION 2), bytes 1–16 are the encoded sensor data fields
-(`humidity_pct` and `luminosity_lux` are existing fields in this range), and byte[17]
+The characteristic value is a 20-byte frame: byte[0] is the version sentinel
+(`0x03`, FRAME_VERSION 3), bytes 1–16 are the encoded sensor data fields
+(`humidity_pct` and `luminosity_lux` are existing fields in this range), bytes
+17–18 are the rain rate (u16 LE, deci-mm/h, sentinel `u16::MAX`), and byte[19]
 is a diagnostics bitfield:
 
 - bit 0 = sky-IR occlusion (MLX90614 sky temp too close to ambient)
@@ -358,7 +364,7 @@ acceptance — the link must hold and repeat over a sustained run.
 
 `ble_notify_check.sh` connects, then subscribes via BlueZ **`AcquireNotify`** (a
 python-dbus reader), captures frames for `WINDOW_SECS` (default 15 s), and asserts
-at least `MIN_FRAMES` (default 5) 18-byte frames with byte[0] == 0x02. It uses
+at least `MIN_FRAMES` (default 5) 20-byte frames with byte[0] == 0x03. It uses
 `AcquireNotify` — **not** bluetoothctl's `notify on` output — because BlueZ only
 re-emits the `Value` property when it _changes_, and the near-constant telemetry
 gets deduped to silence even while notifications flow on-air; `AcquireNotify`

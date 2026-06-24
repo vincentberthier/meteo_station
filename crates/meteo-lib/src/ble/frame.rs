@@ -5,7 +5,7 @@
     reason = "defmt::Format macro expansion triggers this lint as a false positive"
 )]
 
-//! Telemetry wire frame v2 — fixed-length, little-endian, 18 bytes.
+//! Telemetry wire frame v3 — fixed-length, little-endian, 20 bytes.
 //!
 //! All multi-byte fields are encoded **little-endian**; the BLE central must
 //! decode them accordingly.
@@ -14,7 +14,7 @@
 //!
 //! | Off   | Field               | Wire type | Encoding                                                                    | Sentinel (None)    |
 //! |-------|---------------------|-----------|-----------------------------------------------------------------------------|--------------------|
-//! | 0     | version             | u8        | [`FRAME_VERSION`] (= 2)                                                     | —                  |
+//! | 0     | version             | u8        | [`FRAME_VERSION`] (= 3)                                                     | —                  |
 //! | 1–2   | temperature         | i16 LE    | round(°C × 100) centi-°C                                                    | `i16::MIN`         |
 //! | 3–4   | pressure            | u16 LE    | round(hPa × 10) deci-hPa                                                   | `u16::MAX`         |
 //! | 5–6   | humidity            | u16 LE    | round(%RH × 100) centi-%RH                                                  | `u16::MAX`         |
@@ -24,15 +24,16 @@
 //! | 12–13 | wind speed          | u16 LE    | round(m/s × 100) cm/s                                                       | `u16::MAX`         |
 //! | 14–15 | wind direction      | u16 LE    | round(deg × 10) deci-deg                                                    | `u16::MAX`         |
 //! | 16    | battery             | u8        | percent 0..=100                                                             | `0xFF`             |
-//! | 17    | diagnostics         | u8        | bitfield: bit0 = sky-IR occlusion, bit1 = BMP388 fault, bit2 = BME280 fault, bit3 = VEML7700 fault, bit4 = baro divergence, bit5 = MLX90614 fault, bits 6–7 reserved | — (always present) |
+//! | 17–18 | rain rate           | u16 LE    | round(mm/h × 10) deci-mm/h                                                  | `u16::MAX`         |
+//! | 19    | diagnostics         | u8        | bitfield: bit0 = sky-IR occlusion, bit1 = BMP388 fault, bit2 = BME280 fault, bit3 = VEML7700 fault, bit4 = baro divergence, bit5 = MLX90614 fault, bits 6–7 reserved | — (always present) |
 
 /// Wire-format version tag written to byte 0 of every frame.
-pub const FRAME_VERSION: u8 = 2;
+pub const FRAME_VERSION: u8 = 3;
 
-/// Total length (in bytes) of a v2 telemetry frame.
-pub const FRAME_LEN: usize = 18;
+/// Total length (in bytes) of a v3 telemetry frame.
+pub const FRAME_LEN: usize = 20;
 
-/// Per-frame health/diagnostics bitfield (frame v2, byte 17).
+/// Per-frame health/diagnostics bitfield (frame v3, byte 19).
 ///
 /// Bit 0 = sky-IR sensor ambient diverges from the barometer air temperature
 /// beyond the configured threshold (possible occlusion / icing).
@@ -174,7 +175,9 @@ pub struct Telemetry {
     pub wind_dir_deg: Option<f32>,
     /// Battery charge level in percent (0–100).
     pub battery_pct: Option<u8>,
-    /// Per-frame diagnostics bitfield (frame v2).
+    /// Rainfall rate in millimetres per hour.
+    pub rain_rate_mm_h: Option<f32>,
+    /// Per-frame diagnostics bitfield (frame v3).
     pub diagnostics: Diagnostics,
 }
 
@@ -212,6 +215,7 @@ impl Telemetry {
             wind_speed_ms: None,
             wind_dir_deg: None,
             battery_pct: None,
+            rain_rate_mm_h: None,
             diagnostics: Diagnostics::empty(),
         }
     }
@@ -262,7 +266,11 @@ impl Telemetry {
         frame[14..16].copy_from_slice(&dir.to_le_bytes());
 
         frame[16] = self.battery_pct.unwrap_or(0xFF);
-        frame[17] = self.diagnostics.0;
+
+        let rain = self.rain_rate_mm_h.map_or(u16::MAX, |v| scale_u16(v, 10.0));
+        frame[17..19].copy_from_slice(&rain.to_le_bytes());
+
+        frame[19] = self.diagnostics.0;
 
         frame
     }
@@ -352,7 +360,16 @@ impl Telemetry {
             Some(bytes[16])
         };
 
-        let diagnostics = Diagnostics(bytes[17]);
+        let rain_rate_mm_h = {
+            let raw = u16::from_le_bytes([bytes[17], bytes[18]]);
+            if raw == u16::MAX {
+                None
+            } else {
+                Some(f32::from(raw) / 10.0)
+            }
+        };
+
+        let diagnostics = Diagnostics(bytes[19]);
 
         Ok(Self {
             temperature_c,
@@ -363,6 +380,7 @@ impl Telemetry {
             wind_speed_ms,
             wind_dir_deg,
             battery_pct,
+            rain_rate_mm_h,
             diagnostics,
         })
     }
@@ -483,6 +501,7 @@ mod tests {
         assert!(telem.wind_speed_ms.is_none());
         assert!(telem.wind_dir_deg.is_none());
         assert!(telem.battery_pct.is_none());
+        assert!(telem.rain_rate_mm_h.is_none());
     }
 
     // -------------------------------------------------------------------------
@@ -490,7 +509,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn encode_emits_eighteen_bytes_with_version_two() {
+    fn encode_emits_twenty_bytes_with_version_three() {
         // Given
         let telem = Telemetry::empty();
 
@@ -498,8 +517,8 @@ mod tests {
         let frame = telem.encode();
 
         // Then
-        assert_eq!(frame.len(), 18);
-        assert_eq!(frame[0], 2);
+        assert_eq!(frame.len(), 20);
+        assert_eq!(frame[0], 3);
     }
 
     #[test]
@@ -527,6 +546,8 @@ mod tests {
         assert_eq!(&frame[14..16], &u16::MAX.to_le_bytes());
         // battery sentinel: 0xFF
         assert_eq!(frame[16], 0xFF);
+        // rain rate sentinel: u16::MAX as LE
+        assert_eq!(&frame[17..19], &u16::MAX.to_le_bytes());
     }
 
     #[test]
@@ -561,8 +582,8 @@ mod tests {
         // When
         let frame = telem.encode();
 
-        // Then
-        assert_eq!(frame[17], 0x01);
+        // Then — diagnostics is the trailing byte 19 in v3
+        assert_eq!(frame[19], 0x01);
     }
 
     // -------------------------------------------------------------------------
@@ -571,34 +592,34 @@ mod tests {
 
     #[test]
     fn decode_rejects_wrong_length() {
-        // Given — 17 bytes is no longer valid (v2 requires 18)
-        let short17 = [0_u8; 17];
+        // Given — 18 bytes was the v2 length; v3 requires 20
+        let short18 = [0_u8; 18];
 
         // When
-        let result = Telemetry::decode(&short17);
+        let result = Telemetry::decode(&short18);
 
         // Then
-        assert_eq!(result, Err(FrameError::WrongLength(17)));
+        assert_eq!(result, Err(FrameError::WrongLength(18)));
 
-        // Also check 16 bytes
-        let short16 = [0_u8; 16];
+        // Also check 19 bytes (one short of v3)
+        let short19 = [0_u8; 19];
         assert_eq!(
-            Telemetry::decode(&short16),
-            Err(FrameError::WrongLength(16))
+            Telemetry::decode(&short19),
+            Err(FrameError::WrongLength(19))
         );
     }
 
     #[test]
     fn decode_rejects_unknown_version() {
-        // Given — 18 bytes with version byte = 3 (2 is now valid; 3 is unknown)
-        let mut frame = [0_u8; 18];
-        frame[0] = 3;
+        // Given — 20 bytes with version byte = 4 (3 is now valid; 4 is unknown)
+        let mut frame = [0_u8; 20];
+        frame[0] = 4;
 
         // When
         let result = Telemetry::decode(&frame);
 
         // Then
-        assert_eq!(result, Err(FrameError::UnknownVersion(3)));
+        assert_eq!(result, Err(FrameError::UnknownVersion(4)));
     }
 
     #[test]
@@ -619,6 +640,7 @@ mod tests {
         assert_eq!(decoded.wind_speed_ms, None);
         assert_eq!(decoded.wind_dir_deg, None);
         assert_eq!(decoded.battery_pct, None);
+        assert_eq!(decoded.rain_rate_mm_h, None);
         assert_eq!(decoded.diagnostics, Diagnostics::empty());
 
         Ok(())
@@ -638,6 +660,7 @@ mod tests {
             wind_speed_ms: Some(3.5),
             wind_dir_deg: Some(270.0),
             battery_pct: Some(80),
+            rain_rate_mm_h: Some(12.4),
             ..Telemetry::empty()
         };
         let frame = telem.encode();
@@ -652,6 +675,35 @@ mod tests {
         assert!((decoded.wind_speed_ms.unwrap() - 3.5).abs() < 0.01);
         assert!((decoded.wind_dir_deg.unwrap() - 270.0).abs() < 0.1);
         assert_eq!(decoded.battery_pct, Some(80));
+        assert!((decoded.rain_rate_mm_h.unwrap() - 12.4).abs() < 0.1);
+
+        Ok(())
+    }
+
+    #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "test: rain value known to be Some after encode/decode"
+    )]
+    fn rain_rate_roundtrips_value_and_sentinel() -> TestResult {
+        // Given — a present rain rate
+        let wet = Telemetry {
+            rain_rate_mm_h: Some(7.3),
+            ..Telemetry::empty()
+        };
+
+        // When
+        let decoded = Telemetry::decode(&wet.encode())?;
+
+        // Then — recovered within the deci-mm/h LSB
+        assert!((decoded.rain_rate_mm_h.unwrap() - 7.3).abs() < 0.1);
+
+        // Given — no rain field
+        let dry = Telemetry::empty();
+
+        // When / Then — sentinel decodes back to None
+        let decoded_dry = Telemetry::decode(&dry.encode())?;
+        assert_eq!(decoded_dry.rain_rate_mm_h, None);
 
         Ok(())
     }
@@ -904,9 +956,14 @@ mod tests {
             bytes[14] = b14;
             bytes[15] = b15;
             bytes[16] = b16;
-            bytes[17] = b17;
+            // Force rain rate = u16::MAX (sentinel → None) for the same reason as
+            // lux: a non-sentinel rain value would scale/round-trip but not bit-exact.
+            bytes[17] = 0xFF;
+            bytes[18] = 0xFF;
+            // Diagnostics is the trailing byte 19 in v3.
+            bytes[19] = b17;
 
-            let decoded = Telemetry::decode(&bytes).expect("valid v2 frame must decode");
+            let decoded = Telemetry::decode(&bytes).expect("valid v3 frame must decode");
             let re_encoded = decoded.encode();
             prop_assert_eq!(bytes, re_encoded);
         }

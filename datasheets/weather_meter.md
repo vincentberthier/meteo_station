@@ -103,6 +103,21 @@ above). Ignore any open/unused conductors.
 1–6) per sensor — plug in, meter the live pair, jumper to the MCU. A 6P6C jack
 seats 6P4C/6P2C plugs fine; the extra pins stay dead.
 
+**Confirmed live pairs for THIS kit (bench-verified 2026-06):**
+
+| Cable      | Live pair on its 6P6C breakout | Plug type             |
+| ---------- | ------------------------------ | --------------------- |
+| Anemometer | **middle pair, pins 3 & 4**    | 6P2C (seated centred) |
+| Rain gauge | **middle pair, pins 3 & 4**    | 6P2C (seated centred) |
+| Wind vane  | **pins 2 & 5**                 | wider plug            |
+
+Each cable is an independent crimp, so a pair's position on one breakout does **not**
+predict another's — confirm each. (An earlier "outer pair = rain by deduction" guess
+was wrong: the rain gauge is a 6P2C like the anemometer, so its live pair is the
+**middle**, not the sides, and the outer pins are dead.) When a multimeter isn't
+handy, `crates/meteo-firmware/src/bin/probe.rs` (`just probe`) identifies the live
+pair hands-free over defmt.
+
 ---
 
 ## STM32H753ZI Integration Notes

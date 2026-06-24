@@ -14,11 +14,14 @@
 )]
 
 mod aggregator;
+mod anemometer;
 mod ble;
 mod bme;
 mod bmp;
 mod bus;
 mod mlx;
+mod rain;
+mod vane;
 mod veml;
 mod watchdog;
 
@@ -28,7 +31,7 @@ use embassy_executor::Spawner;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
-use esp_hal::gpio::{Level, Output, OutputConfig};
+use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
 use esp_hal::i2c::master::{Config as I2cConfig, I2c};
 use esp_hal::interrupt::software::SoftwareInterruptControl;
 use esp_hal::rtc_cntl::Rtc;
@@ -127,6 +130,27 @@ async fn main(spawner: Spawner) {
     let veml_i2c: SharedI2c = I2cDevice::new(bus);
     spawner.spawn(
         veml::read_luminosity(veml_i2c, VEML7700_ADDR).expect("read_luminosity already spawned"),
+    );
+
+    // Weather meter (SparkFun SEN-15901): anemometer on GPIO22 (J3/9), rain gauge
+    // on GPIO12 (J3/7), wind vane on GPIO1 (J1/4, ADC1). The reed switches use
+    // internal pull-ups; all three tasks degrade gracefully and bump no watchdog
+    // beat (calm/dry/disconnected reads are legitimate, not stalls).
+    let anemometer_in = Input::new(
+        peripherals.GPIO22,
+        InputConfig::default().with_pull(Pull::Up),
+    );
+    spawner.spawn(
+        anemometer::read_wind_speed(anemometer_in).expect("read_wind_speed already spawned"),
+    );
+    let rain_in = Input::new(
+        peripherals.GPIO12,
+        InputConfig::default().with_pull(Pull::Up),
+    );
+    spawner.spawn(rain::read_rain(rain_in).expect("read_rain already spawned"));
+    spawner.spawn(
+        vane::read_wind_dir(peripherals.ADC1, peripherals.GPIO1)
+            .expect("read_wind_dir already spawned"),
     );
 
     // Status LED on GPIO8 (the external LED + the onboard WS2812 share this line).

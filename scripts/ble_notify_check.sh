@@ -5,7 +5,7 @@
 #   Connects to the on-chip ESP32-H2 BLE peripheral (MeteoStation), subscribes to
 #   the telemetry characteristic, captures notifications for WINDOW_SECS, and
 #   asserts at least MIN_FRAMES well-formed frames arrived (each FRAME_LEN bytes
-#   with byte[0] == 0x02, the frame-version sentinel). Exits 0 on PASS, non-zero
+#   with byte[0] == 0x03, the frame-version sentinel). Exits 0 on PASS, non-zero
 #   on FAIL.
 #
 # Why BlueZ AcquireNotify (not bluetoothctl "notify on" output parsing):
@@ -25,7 +25,7 @@
 #   CONNECT_TIMEOUT  — per-step deadline in seconds           (30)
 #   WINDOW_SECS      — notification capture window in seconds (15)
 #   MIN_FRAMES       — minimum notifications required to PASS (5)
-#   FRAME_LEN        — expected payload length in bytes       (18)
+#   FRAME_LEN        — expected payload length in bytes       (20)
 #
 # Requires on gaia:
 #   bluetoothctl, busctl, python3 with the `dbus` bindings (python-dbus), date
@@ -54,7 +54,7 @@ CHAR_UUID="${CHAR_UUID:-7e700002-b1df-42a1-bb5f-6a1028c793b0}"
 CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-30}"
 WINDOW_SECS="${WINDOW_SECS:-15}"
 MIN_FRAMES="${MIN_FRAMES:-5}"
-FRAME_LEN="${FRAME_LEN:-18}"
+FRAME_LEN="${FRAME_LEN:-20}"
 
 export DEVICE ADAPTER CHAR_UUID WINDOW_SECS MIN_FRAMES FRAME_LEN
 
@@ -207,7 +207,7 @@ while time.time() < end:
     if not poller.poll(remaining_ms):
         continue
     data = os.read(fd, mtu)
-    if len(data) == frame_len and data[0] == 0x02:
+    if len(data) == frame_len and data[0] == 0x03:
         good += 1
     elif data:
         bad += 1
@@ -227,7 +227,7 @@ cleanup
 
 case "$rc" in
     0) log "PASS: telemetry notifications flow correctly"; exit 0 ;;
-    2) fail "malformed frame(s) received — wrong length or byte[0] != 0x02" ;;
+    2) fail "malformed frame(s) received — wrong length or byte[0] != 0x03" ;;
     3) fail "too few valid frames in ${WINDOW_SECS}s; need ${MIN_FRAMES}" ;;
     *) fail "notify reader error (GATT not ready / characteristic missing)" ;;
 esac

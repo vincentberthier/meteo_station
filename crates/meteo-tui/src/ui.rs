@@ -77,8 +77,8 @@ fn render_table(frame: &mut Frame, area: Rect, app: &AppState, now: Instant) {
         ("Humidity", model::fmt_humidity(t.humidity_pct)),
         ("Sky temp", model::fmt_temp(t.sky_temp_c)),
         ("Luminosity", model::fmt_lux(t.luminosity_lux)),
-        ("Wind speed", model::fmt_wind_speed(t.wind_speed_ms)),
-        ("Wind dir", model::fmt_wind_dir(t.wind_dir_deg)),
+        ("Wind", model::fmt_wind(t.wind_speed_ms, t.wind_dir_deg)),
+        ("Rain", model::fmt_rain(t.rain_rate_mm_h)),
         ("Battery", model::fmt_battery(t.battery_pct)),
     ];
     let base = if app.is_stale(now, STALE_AFTER) {

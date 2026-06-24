@@ -106,20 +106,49 @@ pub fn fmt_lux(v: Option<f32>) -> String {
     fmt_unit(v, "lux", 0)
 }
 
-/// Format a wind-speed value for display.
+/// 16-point compass label for a heading in degrees.
 ///
-/// Returns `"N/A"` for `None`, otherwise `"{value:.1} m/s"`.
+/// Convention: 0°=N, 90°=E, 180°=S, 270°=W (matches the firmware's
+/// `weather_meter::VANE_TABLE`). The heading is normalised to `[0, 360)` and
+/// bucketed into 22.5° sectors.
 #[must_use]
-pub fn fmt_wind_speed(v: Option<f32>) -> String {
-    fmt_unit(v, "m/s", 1)
+pub fn compass_label(deg: f32) -> &'static str {
+    const POINTS: [&str; 16] = [
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW",
+        "NW", "NNW",
+    ];
+    let norm = deg.rem_euclid(360.0);
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "round() of a value in [0,16] is a small non-negative whole number"
+    )]
+    let sector = (norm / 22.5).round() as usize;
+    // 360° rounds up to sector 16, which wraps back to N (sector 0).
+    let idx = if sector >= POINTS.len() { 0 } else { sector };
+    POINTS[idx]
 }
 
-/// Format a wind-direction value for display.
+/// Format wind speed and direction as one combined cell.
 ///
-/// Returns `"N/A"` for `None`, otherwise `"{value:.0} °"`.
+/// `"N/A"` when both are `None`; otherwise e.g. `"3.5 m/s, 270° (W)"`, gracefully
+/// dropping whichever half is missing.
 #[must_use]
-pub fn fmt_wind_dir(v: Option<f32>) -> String {
-    fmt_unit(v, "°", 0)
+pub fn fmt_wind(speed: Option<f32>, dir: Option<f32>) -> String {
+    match (speed, dir) {
+        (None, None) => "N/A".to_owned(),
+        (Some(s), None) => format!("{s:.1} m/s"),
+        (None, Some(d)) => format!("{d:.0}° ({})", compass_label(d)),
+        (Some(s), Some(d)) => format!("{s:.1} m/s, {d:.0}° ({})", compass_label(d)),
+    }
+}
+
+/// Format a rainfall-rate value for display.
+///
+/// Returns `"N/A"` for `None`, otherwise `"{value:.1} mm/h"`.
+#[must_use]
+pub fn fmt_rain(v: Option<f32>) -> String {
+    fmt_unit(v, "mm/h", 1)
 }
 
 /// Format a battery-percentage value for display.
@@ -454,6 +483,52 @@ mod tests {
 
         // Then
         assert_eq!(result, "80 %");
+        Ok(())
+    }
+
+    // --- compass_label / fmt_wind / fmt_rain tests ---
+
+    #[test]
+    fn compass_label_cardinal_points() -> TestResult {
+        // Given / When / Then — the four cardinals (0=N, 90=E, 180=S, 270=W)
+        assert_eq!(compass_label(0.0), "N");
+        assert_eq!(compass_label(90.0), "E");
+        assert_eq!(compass_label(180.0), "S");
+        assert_eq!(compass_label(270.0), "W");
+        Ok(())
+    }
+
+    #[test]
+    fn compass_label_intercardinal_and_wraparound() -> TestResult {
+        // Given / When / Then
+        assert_eq!(compass_label(45.0), "NE");
+        assert_eq!(compass_label(247.5), "WSW");
+        // 350° is within 10° of 360°≡0° → N
+        assert_eq!(compass_label(350.0), "N");
+        // Negative / out-of-range headings normalise
+        assert_eq!(compass_label(-90.0), "W");
+        assert_eq!(compass_label(450.0), "E");
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_wind_combines_speed_and_direction() -> TestResult {
+        // Given / When / Then — both present
+        assert_eq!(fmt_wind(Some(3.5), Some(270.0)), "3.5 m/s, 270° (W)");
+        // Speed only
+        assert_eq!(fmt_wind(Some(3.5), None), "3.5 m/s");
+        // Direction only
+        assert_eq!(fmt_wind(None, Some(90.0)), "90° (E)");
+        // Neither
+        assert_eq!(fmt_wind(None, None), "N/A");
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_rain_some_and_none() -> TestResult {
+        // Given / When / Then
+        assert_eq!(fmt_rain(Some(12.0)), "12.0 mm/h");
+        assert_eq!(fmt_rain(None), "N/A");
         Ok(())
     }
 

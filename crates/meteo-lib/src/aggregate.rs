@@ -47,6 +47,16 @@ pub enum SensorReading {
     Luminosity { lux: f32 },
     /// VEML7700 down: blanks luminosity, raises `VEML7700_FAULT`.
     LuminosityFault,
+    /// Anemometer: wind speed in m/s. Calm reads a legitimate `0.0`.
+    WindSpeed { speed_ms: f32 },
+    /// Wind vane: heading in degrees (0–360).
+    WindDir { dir_deg: f32 },
+    /// Rain gauge: rainfall rate in mm/h over the sliding window. `None` while the
+    /// window is still filling (no value beats a wrong, extrapolated one).
+    Rain { rate_mm_h: Option<f32> },
+    // TODO: the weather-meter inputs have no fault/diagnostics flags yet — a calm
+    // anemometer, a disconnected vane, and a dry rain gauge all read as plausible
+    // zeros/headings. Allocate diagnostics bits (6–7 reserved) once needed.
 }
 
 /// Configuration for the aggregator.
@@ -158,6 +168,15 @@ impl Aggregator {
             SensorReading::LuminosityFault => {
                 self.telemetry.luminosity_lux = None;
                 self.veml_fault = true;
+            }
+            SensorReading::WindSpeed { speed_ms } => {
+                self.telemetry.wind_speed_ms = Some(speed_ms);
+            }
+            SensorReading::WindDir { dir_deg } => {
+                self.telemetry.wind_dir_deg = Some(dir_deg);
+            }
+            SensorReading::Rain { rate_mm_h } => {
+                self.telemetry.rain_rate_mm_h = rate_mm_h;
             }
         }
     }
@@ -452,6 +471,39 @@ mod tests {
         // Then
         assert_eq!(snap.luminosity_lux, None);
         assert!(snap.diagnostics.veml7700_fault());
+    }
+
+    #[test]
+    fn aggregator_wind_and_rain_populate_their_fields() {
+        // Given
+        let mut agg = Aggregator::new(TEST_CFG);
+
+        // When
+        agg.ingest(SensorReading::WindSpeed { speed_ms: 3.5 });
+        agg.ingest(SensorReading::WindDir { dir_deg: 270.0 });
+        agg.ingest(SensorReading::Rain {
+            rate_mm_h: Some(12.0),
+        });
+        let snap = agg.snapshot();
+
+        // Then
+        assert_eq!(snap.wind_speed_ms, Some(3.5));
+        assert_eq!(snap.wind_dir_deg, Some(270.0));
+        assert_eq!(snap.rain_rate_mm_h, Some(12.0));
+    }
+
+    #[test]
+    fn aggregator_latest_wind_speed_wins() {
+        // Given
+        let mut agg = Aggregator::new(TEST_CFG);
+
+        // When — a later reading supersedes the earlier one
+        agg.ingest(SensorReading::WindSpeed { speed_ms: 1.0 });
+        agg.ingest(SensorReading::WindSpeed { speed_ms: 4.2 });
+        let snap = agg.snapshot();
+
+        // Then
+        assert_eq!(snap.wind_speed_ms, Some(4.2));
     }
 
     #[test]
