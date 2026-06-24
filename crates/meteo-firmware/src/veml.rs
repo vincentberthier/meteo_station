@@ -4,7 +4,7 @@
 )]
 
 use defmt::{Debug2Format, debug, info, warn};
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Ticker, Timer};
 use meteo_lib::veml7700::{self, Veml7700};
 use meteo_lib::{SensorReading, trunc2};
 
@@ -87,7 +87,17 @@ pub async fn read_luminosity(i2c: SharedI2c, address: u8) {
     let mut initialized = false;
     let mut discard_next = true; // first sample after any (re)config is stale
 
+    // Report cadence: 1 Hz, paced by a Ticker (the publish clock, not a readiness
+    // sleep — cf. the aggregator). The VEML integrates continuously, so a 1 Hz read
+    // is always fresh; looping at the integration time published ~10×/s for no
+    // benefit. `sample` still waits the integration time before each read (its
+    // hardware settle) and keeps its auto-range discard logic; the Ticker only bounds
+    // how often that runs.
+    let mut ticker = Ticker::every(Duration::from_secs(1));
+
     loop {
+        ticker.next().await;
+
         if !initialized && init(&mut sensor, idx).await {
             info!("VEML7700 initialized successfully!");
             initialized = true;
@@ -98,12 +108,10 @@ pub async fn read_luminosity(i2c: SharedI2c, address: u8) {
             initialized = sample(&mut sensor, &mut idx, &mut discard_next).await;
         }
 
-        // No live handshake this cycle: report a fault (aggregator blanks luminosity
-        // and raises VEML7700_FAULT) and pace the re-init attempts at 1 Hz. A settled
-        // sample path does its own integration-time wait, so no extra delay there.
+        // No live handshake this cycle: report a fault so the aggregator blanks
+        // luminosity and raises VEML7700_FAULT. The Ticker paces the re-init retry.
         if !initialized {
             SENSOR_CHANNEL.send(SensorReading::LuminosityFault).await;
-            Timer::after(Duration::from_secs(1)).await;
         }
     }
 }
