@@ -12,3 +12,8 @@ target/
 # KiCad local/transient files (UI state + generated ERC reports)
 *.kicad_prl
 *-erc.rpt
+# KiCad runtime cruft — lock files (held while the GUI is open) and autosaves
+*.lck
+_autosave-*
+*.kicad_*-bak
+fp-info-cache

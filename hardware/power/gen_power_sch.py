@@ -108,6 +108,9 @@ PINS = {
     "Connector_Generic:Conn_01x02": {'1': (-5.08, 0, -1, 0), '2': (-5.08, 2.54, -1, 0)},
     "Connector_Generic:Conn_01x04": {'1': (-5.08, -2.54, -1, 0), '2': (-5.08, 0, -1, 0),
                                       '3': (-5.08, 2.54, -1, 0), '4': (-5.08, 5.08, -1, 0)},
+    "Connector_Generic:Conn_01x05": {'1': (-5.08, -5.08, -1, 0), '2': (-5.08, -2.54, -1, 0),
+                                      '3': (-5.08, 0, -1, 0), '4': (-5.08, 2.54, -1, 0),
+                                      '5': (-5.08, 5.08, -1, 0)},
     "Connector_Generic:Conn_01x06": {'1': (-5.08, -5.08, -1, 0), '2': (-5.08, -2.54, -1, 0),
                                       '3': (-5.08, 0, -1, 0), '4': (-5.08, 2.54, -1, 0),
                                       '5': (-5.08, 5.08, -1, 0), '6': (-5.08, 7.62, -1, 0)},
@@ -116,14 +119,15 @@ PINS = {
 # ---------- the design: (ref, lib_id, value, x, y, {pin: net}) ----------
 COMPS = [
     ("J1",  "Connector_Generic:Conn_01x02", "PV-12W  12V 1A",        45, 60, {'1':'SOLAR+', '2':'GND'}),
-    ("U1",  "Connector_Generic:Conn_01x04", "CN3791 12V MPPT",      100, 60, {'1':'SOLAR+', '2':'GND', '3':'VBAT', '4':'GND'}),
+    # INA219 #1 (0x40): high-side on the PV feed -> harvest current + panel voltage
+    ("U6",  "Connector_Generic:Conn_01x06", "INA219 0x40 (PV)",      62, 115,{'1':'SOLAR_CHG','2':'SOLAR+','3':'GND','4':'V3V3','5':'SCL','6':'SDA'}),
+    ("U1",  "Connector_Generic:Conn_01x04", "CN3791 12V MPPT",      100, 60, {'1':'SOLAR_CHG', '2':'GND', '3':'VBAT', '4':'GND'}),
     ("BT1", "Device:Battery_Cell",          "1S LiPo 3.7V 10Ah",    100, 120,{'1':'VBAT', '2':'GND'}),
-    ("U2",  "Connector_Generic:Conn_01x04", "MT3608 -> 5.0V",       165, 60, {'1':'VBAT', '2':'GND', '3':'BOOST5V', '4':'GND'}),
+    # INA219 #2 (0x41): high-side on the battery->boost feed -> load current + battery voltage
+    ("U7",  "Connector_Generic:Conn_01x06", "INA219 0x41 (BATT)",   150, 165,{'1':'VLOAD','2':'VBAT','3':'GND','4':'V3V3','5':'SCL','6':'SDA'}),
+    ("U2",  "Connector_Generic:Conn_01x04", "MT3608 -> 5.0V",       165, 60, {'1':'VLOAD', '2':'GND', '3':'BOOST5V', '4':'GND'}),
     ("D1",  "Device:D_Schottky",            "1N5817",               210, 47, {'2':'BOOST5V', '1':'V5'}),
-    ("U3",  "Connector_Generic:Conn_01x06", "ESP32-H2-DevKitM-1",   305, 70, {'1':'V5', '2':'GND', '3':'V3V3', '4':'VSENSE', '5':'SDA', '6':'SCL'}),
-    # battery-sense divider
-    ("R1",  "Device:R",                     "100k",                 250, 150,{'1':'VBAT',  '2':'VSENSE'}),
-    ("R2",  "Device:R",                     "100k",                 250, 180,{'1':'VSENSE','2':'GND'}),
+    ("U3",  "Connector_Generic:Conn_01x05", "ESP32-H2-DevKitM-1",   305, 70, {'1':'V5', '2':'GND', '3':'V3V3', '4':'SDA', '5':'SCL'}),
     # I2C pull-ups
     ("R3",  "Device:R",                     "4.75k",                360, 105,{'1':'V3V3', '2':'SDA'}),
     ("R4",  "Device:R",                     "4.75k",                378, 105,{'1':'V3V3', '2':'SCL'}),
@@ -131,7 +135,7 @@ COMPS = [
     ("U4",  "Connector_Generic:Conn_01x04", "BMP388 0x76",          305, 150,{'1':'V3V3','2':'GND','3':'SDA','4':'SCL'}),
     ("U5",  "Connector_Generic:Conn_01x04", "MLX90614 0x5A",        375, 150,{'1':'V3V3','2':'GND','3':'SDA','4':'SCL'}),
     # decoupling / bulk
-    ("C1",  "Device:C_Polarized",           "22uF",                 140, 115,{'1':'VBAT','2':'GND'}),
+    ("C1",  "Device:C_Polarized",           "22uF",                 140, 115,{'1':'VLOAD','2':'GND'}),
     ("C2",  "Device:C_Polarized",           "100uF",                280, 105,{'1':'V5','2':'GND'}),
     ("C3",  "Device:C",                     "10uF",                 295, 105,{'1':'V5','2':'GND'}),
     ("C4",  "Device:C",                     "10uF",                 330, 200,{'1':'V3V3','2':'GND'}),
@@ -141,13 +145,14 @@ COMPS = [
 
 NOTES = [
     (40, 25, 3.0, "Meteo Station — Power Subsystem  (generated)"),
-    (40, 33, 1.6, "PV-12W -> CN3791 12V MPPT -> 1S LiPo -> MT3608 (5.0V) -> DevKit 5V pin."),
+    (40, 33, 1.6, "PV-12W -> [U6 INA219] -> CN3791 12V MPPT -> 1S LiPo -> [U7 INA219] -> MT3608 (5.0V) -> DevKit 5V pin."),
     (40, 38, 1.6, "D1 (1N5817): MT3608 5V -> DevKit 5V pin; isolates the boost so USB VBUS wins when flashing (no back-feed)."),
-    (40, 43, 1.6, "R1/R2 divide VBAT to ~2.1V into GPIO2 (ADC1_CH1). I2C pull-ups 4.75k on SDA/SCL."),
-    (210, 145, 1.6, "FUTURE: INA219 + owned 0.1ohm shunt in series with VBAT for current/power telemetry."),
+    (40, 43, 1.6, "U6 INA219 0x40: high-side on the PV feed = harvest current + panel voltage."),
+    (40, 48, 1.6, "U7 INA219 0x41: high-side on the battery->boost feed = load current + battery voltage (Vbus)."),
+    (40, 53, 1.6, "Both INA219 on I2C0 (VCC=3V3, 0.1ohm onboard shunt). GPIO2/ADC1_CH1 now a free spare; battery V comes from U7."),
     # Where each decoupling/bulk cap physically goes (placed in the empty lower-left).
     (40, 235, 2.2, "Capacitor placement (physical):"),
-    (42, 243, 1.6, "C1 22uF   - bulk at the MT3608 input (by the battery / boost VIN)"),
+    (42, 243, 1.6, "C1 22uF   - bulk at the MT3608 input (VLOAD, right at boost VIN, after the U7 shunt)"),
     (42, 249, 1.6, "C2 100uF  - bulk on the 5V rail, at the DevKit 5V pin"),
     (42, 255, 1.6, "C3 10uF   - beside C2 at the DevKit 5V pin"),
     (42, 261, 1.6, "C4 10uF   - bulk on the 3V3 rail, at the DevKit 3V3 pin"),

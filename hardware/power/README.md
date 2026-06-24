@@ -5,9 +5,9 @@ Solar charging + power path for the weather station, captured as a KiCad 10 sche
 ## Chain
 
 ```
-PV-12W panel ─▶ CN3791 12V MPPT ─▶ 1S LiPo 10Ah ─▶ MT3608 (5.0V) ─▶ DevKit 5V pin
-              (CV term 4.2V)        (buffer + PCM)   │
-                                                     └▶ R1/R2 divider ─▶ GPIO2 (ADC)
+PV-12W ─▶ [U6 INA219] ─▶ CN3791 12V MPPT ─▶ 1S LiPo 10Ah ─▶ [U7 INA219] ─▶ MT3608 (5.0V) ─▶ D1 ─▶ DevKit 5V pin
+            0x40           (CV term 4.2V)     (buffer + PCM)     0x41
+            (harvest)                                            (load + Vbatt)
 ```
 
 - **Panel:** Seeed PV-12W — Vmp 12 V, Voc 14 V, Isc ~1 A (matches the **12 V** CN3791 variant).
@@ -18,14 +18,22 @@ PV-12W panel ─▶ CN3791 12V MPPT ─▶ 1S LiPo 10Ah ─▶ MT3608 (5.0V) ─
   (~0.45 V drop, LDO still has headroom). When you flash over USB, VBUS appears on the 5V
   pin internally (~5 V) and wins; D1 blocks any back-feed into the boost. USB is the
   DevKit's own port, so no second diode is needed.
-- **Battery sense:** R1 = R2 = 100 kΩ divide VBAT to ~2.1 V (at 4.2 V) into GPIO2 / ADC1_CH1.
-- **I²C pull-ups:** R3/R4 = 4.75 kΩ on SDA/SCL.
-- **Decoupling:** C1 (22 µF) at VBAT, C2/C3 (100 µF + 10 µF) on the 5 V rail, C4–C6 on 3V3
-  (10 µF bulk + 100 nF per sensor) — sized to ride out the BLE radio's TX current bursts.
+- **Current/power telemetry (2× INA219, I²C):** two INA219 breakouts (DEWOTHV / INA219B,
+  on-board 0.1 Ω 1 % shunt, ±3.2 A) on the shared I2C0 bus, VCC on 3V3.
+  - **U6 @ 0x40** — high-side on the PV feed (`SOLAR+ → SOLAR_CHG`): solar **harvest
+    current** + panel voltage (bus input rated to 26 V, fine for the ~12–14 V panel).
+  - **U7 @ 0x41** — high-side on the battery→boost feed (`VBAT → VLOAD`): **load current**
+    drawn by the system + **battery voltage** (the INA219 bus register, more accurate than
+    the SAR ADC). Addresses set by the A0 solder jumper.
+- **Battery sense:** the GPIO2 / ADC1_CH1 divider is **gone** — battery voltage now comes
+  from U7's bus reading. GPIO2 is freed as a spare ADC.
+- **I²C pull-ups:** R3/R4 = 4.75 kΩ on SDA/SCL (now six devices on the bus).
+- **Decoupling:** C1 (22 µF) at the MT3608 input on `VLOAD` (right at boost VIN, after the
+  U7 shunt), C2/C3 (100 µF + 10 µF) on the 5 V rail, C4–C6 on 3V3 (10 µF bulk + 100 nF per
+  sensor) — sized to ride out the BLE radio's TX current bursts.
 
-All parts are on hand (see the project Mouser order); nothing extra is required for v1.
-Future current/power telemetry (INA219 + the owned 0.1 Ω shunt) is noted on the sheet but
-not populated.
+All parts are on hand (see the project Mouser order); the two INA219 modules arrived
+2026-06-21 (lot of 2). Current/power telemetry is now populated on the sheet.
 
 ## Files
 
