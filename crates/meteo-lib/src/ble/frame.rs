@@ -5,16 +5,20 @@
     reason = "defmt::Format macro expansion triggers this lint as a false positive"
 )]
 
-//! Telemetry wire frame v3 — fixed-length, little-endian, 20 bytes.
+//! Telemetry wire frame v4 — fixed-length, little-endian, 28 bytes.
 //!
 //! All multi-byte fields are encoded **little-endian**; the BLE central must
 //! decode them accordingly.
+//!
+//! v4 extends v3 by appending the four power fields (bytes 20–27) and assigning
+//! the two previously-reserved diagnostics bits to the INA219 faults. Bytes 0–19
+//! are byte-for-byte identical to v3.
 //!
 //! # Frame layout
 //!
 //! | Off   | Field               | Wire type | Encoding                                                                    | Sentinel (None)    |
 //! |-------|---------------------|-----------|-----------------------------------------------------------------------------|--------------------|
-//! | 0     | version             | u8        | [`FRAME_VERSION`] (= 3)                                                     | —                  |
+//! | 0     | version             | u8        | [`FRAME_VERSION`] (= 4)                                                     | —                  |
 //! | 1–2   | temperature         | i16 LE    | round(°C × 100) centi-°C                                                    | `i16::MIN`         |
 //! | 3–4   | pressure            | u16 LE    | round(hPa × 10) deci-hPa                                                   | `u16::MAX`         |
 //! | 5–6   | humidity            | u16 LE    | round(%RH × 100) centi-%RH                                                  | `u16::MAX`         |
@@ -23,17 +27,21 @@
 //! | 11    | luminosity exponent | u8        | see lux encoding                                                            | (mantissa=MAX)     |
 //! | 12–13 | wind speed          | u16 LE    | round(m/s × 100) cm/s                                                       | `u16::MAX`         |
 //! | 14–15 | wind direction      | u16 LE    | round(deg × 10) deci-deg                                                    | `u16::MAX`         |
-//! | 16    | battery             | u8        | percent 0..=100                                                             | `0xFF`             |
+//! | 16    | battery             | u8        | percent 0..=100 (derived from `batt_mv`)                                    | `0xFF`             |
 //! | 17–18 | rain rate           | u16 LE    | round(mm/h × 10) deci-mm/h                                                  | `u16::MAX`         |
-//! | 19    | diagnostics         | u8        | bitfield: bit0 = sky-IR occlusion, bit1 = BMP388 fault, bit2 = BME280 fault, bit3 = VEML7700 fault, bit4 = baro divergence, bit5 = MLX90614 fault, bits 6–7 reserved | — (always present) |
+//! | 19    | diagnostics         | u8        | bitfield (see [`Diagnostics`])                                              | — (always present) |
+//! | 20–21 | solar voltage       | u16 LE    | millivolts (PV-side INA219 bus voltage)                                     | `u16::MAX`         |
+//! | 22–23 | solar current       | u16 LE    | milliamps (PV-side harvest current, clamped ≥ 0)                            | `u16::MAX`         |
+//! | 24–25 | battery voltage     | u16 LE    | millivolts (battery-side INA219 bus voltage)                               | `u16::MAX`         |
+//! | 26–27 | load current        | u16 LE    | milliamps (battery-side load current, clamped ≥ 0)                          | `u16::MAX`         |
 
 /// Wire-format version tag written to byte 0 of every frame.
-pub const FRAME_VERSION: u8 = 3;
+pub const FRAME_VERSION: u8 = 4;
 
-/// Total length (in bytes) of a v3 telemetry frame.
-pub const FRAME_LEN: usize = 20;
+/// Total length (in bytes) of a v4 telemetry frame.
+pub const FRAME_LEN: usize = 28;
 
-/// Per-frame health/diagnostics bitfield (frame v3, byte 19).
+/// Per-frame health/diagnostics bitfield (frame v4, byte 19).
 ///
 /// Bit 0 = sky-IR sensor ambient diverges from the barometer air temperature
 /// beyond the configured threshold (possible occlusion / icing).
@@ -42,7 +50,8 @@ pub const FRAME_LEN: usize = 20;
 /// Bit 3 = VEML7700 fault (not initialized / read failing → no luminosity).
 /// Bit 4 = BMP388 vs BME280 temperature/pressure disagree beyond threshold.
 /// Bit 5 = MLX90614 object read failed → no `sky_temp_c`.
-/// Bits 6–7 are reserved and always 0.
+/// Bit 6 = INA219 PV fault (panel-side monitor not initialized / read failing).
+/// Bit 7 = INA219 battery fault (battery-side monitor not initialized / read failing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Diagnostics(pub u8);
@@ -61,7 +70,10 @@ impl Diagnostics {
     pub const BARO_DIVERGENCE: u8 = 1 << 4;
     /// Bit 5: MLX90614 object read failed → no `sky_temp_c`.
     pub const MLX90614_FAULT: u8 = 1 << 5;
-    // Bits 6–7 reserved (0).
+    /// Bit 6: PV-side INA219 (U6 @ 0x40) init/read failing → no solar V/I.
+    pub const INA_PV_FAULT: u8 = 1 << 6;
+    /// Bit 7: battery-side INA219 (U7 @ 0x41) init/read failing → no battery V / load I.
+    pub const INA_BATT_FAULT: u8 = 1 << 7;
 
     /// All-clear diagnostics (no flags set).
     #[must_use]
@@ -141,6 +153,30 @@ impl Diagnostics {
         self.with_flag(Self::MLX90614_FAULT, set)
     }
 
+    /// Returns `true` if the PV-side INA219 fault bit is set.
+    #[must_use]
+    pub const fn ina_pv_fault(self) -> bool {
+        self.0 & Self::INA_PV_FAULT != 0
+    }
+
+    /// Returns a copy with the PV-side INA219 fault bit set to `set`.
+    #[must_use]
+    pub const fn with_ina_pv_fault(self, set: bool) -> Self {
+        self.with_flag(Self::INA_PV_FAULT, set)
+    }
+
+    /// Returns `true` if the battery-side INA219 fault bit is set.
+    #[must_use]
+    pub const fn ina_batt_fault(self) -> bool {
+        self.0 & Self::INA_BATT_FAULT != 0
+    }
+
+    /// Returns a copy with the battery-side INA219 fault bit set to `set`.
+    #[must_use]
+    pub const fn with_ina_batt_fault(self, set: bool) -> Self {
+        self.with_flag(Self::INA_BATT_FAULT, set)
+    }
+
     /// Returns a copy with `mask`'s bit(s) set to `set` (shared helper).
     #[must_use]
     const fn with_flag(self, mask: u8, set: bool) -> Self {
@@ -173,11 +209,19 @@ pub struct Telemetry {
     pub wind_speed_ms: Option<f32>,
     /// Wind direction in degrees (0–360).
     pub wind_dir_deg: Option<f32>,
-    /// Battery charge level in percent (0–100).
+    /// Battery charge level in percent (0–100), derived from `batt_mv`.
     pub battery_pct: Option<u8>,
     /// Rainfall rate in millimetres per hour.
     pub rain_rate_mm_h: Option<f32>,
-    /// Per-frame diagnostics bitfield (frame v3).
+    /// Solar-panel voltage in millivolts (PV-side INA219 bus voltage).
+    pub solar_mv: Option<u16>,
+    /// Solar-panel harvest current in milliamps (PV-side INA219).
+    pub solar_ma: Option<u16>,
+    /// Battery voltage in millivolts (battery-side INA219 bus voltage).
+    pub batt_mv: Option<u16>,
+    /// Load current in milliamps (battery-side INA219).
+    pub load_ma: Option<u16>,
+    /// Per-frame diagnostics bitfield (frame v4).
     pub diagnostics: Diagnostics,
 }
 
@@ -216,6 +260,10 @@ impl Telemetry {
             wind_dir_deg: None,
             battery_pct: None,
             rain_rate_mm_h: None,
+            solar_mv: None,
+            solar_ma: None,
+            batt_mv: None,
+            load_ma: None,
             diagnostics: Diagnostics::empty(),
         }
     }
@@ -234,7 +282,7 @@ impl Telemetry {
         }
     }
 
-    /// Serialises this reading to the fixed 18-byte v2 wire frame.
+    /// Serialises this reading to the fixed 28-byte v4 wire frame.
     ///
     /// All multi-byte fields are little-endian. `None` fields encode to their
     /// respective sentinels (see module-level table).
@@ -272,15 +320,24 @@ impl Telemetry {
 
         frame[19] = self.diagnostics.0;
 
+        frame[20..22].copy_from_slice(&self.solar_mv.unwrap_or(u16::MAX).to_le_bytes());
+        frame[22..24].copy_from_slice(&self.solar_ma.unwrap_or(u16::MAX).to_le_bytes());
+        frame[24..26].copy_from_slice(&self.batt_mv.unwrap_or(u16::MAX).to_le_bytes());
+        frame[26..28].copy_from_slice(&self.load_ma.unwrap_or(u16::MAX).to_le_bytes());
+
         frame
     }
 
-    /// Parses a v2 wire frame, mapping sentinels back to `None`.
+    /// Parses a v4 wire frame, mapping sentinels back to `None`.
     ///
     /// # Errors
     ///
     /// - [`FrameError::WrongLength`] if `bytes` is not exactly [`FRAME_LEN`] bytes.
     /// - [`FrameError::UnknownVersion`] if byte 0 is not [`FRAME_VERSION`].
+    #[expect(
+        clippy::similar_names,
+        reason = "solar_mv/solar_ma (and batt_mv) differ only by the domain mv/ma suffix"
+    )]
     pub fn decode(bytes: &[u8]) -> Result<Self, FrameError> {
         if bytes.len() != FRAME_LEN {
             return Err(FrameError::WrongLength(bytes.len()));
@@ -371,6 +428,11 @@ impl Telemetry {
 
         let diagnostics = Diagnostics(bytes[19]);
 
+        let solar_mv = decode_u16_opt([bytes[20], bytes[21]]);
+        let solar_ma = decode_u16_opt([bytes[22], bytes[23]]);
+        let batt_mv = decode_u16_opt([bytes[24], bytes[25]]);
+        let load_ma = decode_u16_opt([bytes[26], bytes[27]]);
+
         Ok(Self {
             temperature_c,
             pressure_hpa,
@@ -381,9 +443,19 @@ impl Telemetry {
             wind_dir_deg,
             battery_pct,
             rain_rate_mm_h,
+            solar_mv,
+            solar_ma,
+            batt_mv,
+            load_ma,
             diagnostics,
         })
     }
+}
+
+/// Decodes a little-endian `u16` field, mapping the `u16::MAX` sentinel to `None`.
+const fn decode_u16_opt(bytes: [u8; 2]) -> Option<u16> {
+    let raw = u16::from_le_bytes(bytes);
+    if raw == u16::MAX { None } else { Some(raw) }
 }
 
 /// Encodes `lux` as `(mantissa, exponent)` such that `mantissa × 10^exponent ≈ lux`
@@ -509,7 +581,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn encode_emits_twenty_bytes_with_version_three() {
+    fn encode_emits_twenty_eight_bytes_with_version_four() {
         // Given
         let telem = Telemetry::empty();
 
@@ -517,8 +589,8 @@ mod tests {
         let frame = telem.encode();
 
         // Then
-        assert_eq!(frame.len(), 20);
-        assert_eq!(frame[0], 3);
+        assert_eq!(frame.len(), 28);
+        assert_eq!(frame[0], 4);
     }
 
     #[test]
@@ -548,6 +620,11 @@ mod tests {
         assert_eq!(frame[16], 0xFF);
         // rain rate sentinel: u16::MAX as LE
         assert_eq!(&frame[17..19], &u16::MAX.to_le_bytes());
+        // power sentinels: u16::MAX as LE for solar V/I, batt V, load I
+        assert_eq!(&frame[20..22], &u16::MAX.to_le_bytes());
+        assert_eq!(&frame[22..24], &u16::MAX.to_le_bytes());
+        assert_eq!(&frame[24..26], &u16::MAX.to_le_bytes());
+        assert_eq!(&frame[26..28], &u16::MAX.to_le_bytes());
     }
 
     #[test]
@@ -582,7 +659,7 @@ mod tests {
         // When
         let frame = telem.encode();
 
-        // Then — diagnostics is the trailing byte 19 in v3
+        // Then — diagnostics is byte 19 in v4
         assert_eq!(frame[19], 0x01);
     }
 
@@ -592,34 +669,34 @@ mod tests {
 
     #[test]
     fn decode_rejects_wrong_length() {
-        // Given — 18 bytes was the v2 length; v3 requires 20
-        let short18 = [0_u8; 18];
+        // Given — 20 bytes was the v3 length; v4 requires 28
+        let short20 = [0_u8; 20];
 
         // When
-        let result = Telemetry::decode(&short18);
+        let result = Telemetry::decode(&short20);
 
         // Then
-        assert_eq!(result, Err(FrameError::WrongLength(18)));
+        assert_eq!(result, Err(FrameError::WrongLength(20)));
 
-        // Also check 19 bytes (one short of v3)
-        let short19 = [0_u8; 19];
+        // Also check 27 bytes (one short of v4)
+        let short27 = [0_u8; 27];
         assert_eq!(
-            Telemetry::decode(&short19),
-            Err(FrameError::WrongLength(19))
+            Telemetry::decode(&short27),
+            Err(FrameError::WrongLength(27))
         );
     }
 
     #[test]
     fn decode_rejects_unknown_version() {
-        // Given — 20 bytes with version byte = 4 (3 is now valid; 4 is unknown)
-        let mut frame = [0_u8; 20];
-        frame[0] = 4;
+        // Given — 28 bytes with version byte = 5 (4 is now valid; 5 is unknown)
+        let mut frame = [0_u8; 28];
+        frame[0] = 5;
 
         // When
         let result = Telemetry::decode(&frame);
 
         // Then
-        assert_eq!(result, Err(FrameError::UnknownVersion(4)));
+        assert_eq!(result, Err(FrameError::UnknownVersion(5)));
     }
 
     #[test]
@@ -641,7 +718,69 @@ mod tests {
         assert_eq!(decoded.wind_dir_deg, None);
         assert_eq!(decoded.battery_pct, None);
         assert_eq!(decoded.rain_rate_mm_h, None);
+        assert_eq!(decoded.solar_mv, None);
+        assert_eq!(decoded.solar_ma, None);
+        assert_eq!(decoded.batt_mv, None);
+        assert_eq!(decoded.load_ma, None);
         assert_eq!(decoded.diagnostics, Diagnostics::empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn power_fields_roundtrip_values_and_sentinels() -> TestResult {
+        // Given — all four power fields populated
+        let powered = Telemetry {
+            solar_mv: Some(15_000),
+            solar_ma: Some(600),
+            batt_mv: Some(3_900),
+            load_ma: Some(120),
+            ..Telemetry::empty()
+        };
+
+        // When
+        let decoded = Telemetry::decode(&powered.encode())?;
+
+        // Then — exact (no scaling on these fields)
+        assert_eq!(decoded.solar_mv, Some(15_000));
+        assert_eq!(decoded.solar_ma, Some(600));
+        assert_eq!(decoded.batt_mv, Some(3_900));
+        assert_eq!(decoded.load_ma, Some(120));
+
+        // Given — no power data → sentinels → None
+        let unpowered = Telemetry::decode(&Telemetry::empty().encode())?;
+        assert_eq!(unpowered.solar_mv, None);
+        assert_eq!(unpowered.load_ma, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn ina_fault_bits_set_clear_and_roundtrip() -> TestResult {
+        // Given — both INA fault bits set
+        let diag = Diagnostics::empty()
+            .with_ina_pv_fault(true)
+            .with_ina_batt_fault(true);
+
+        // Then — bits 6 and 7
+        assert!(diag.ina_pv_fault());
+        assert!(diag.ina_batt_fault());
+        assert_eq!(diag.0, 0b1100_0000);
+
+        // And they clear independently
+        assert!(!diag.with_ina_pv_fault(false).ina_pv_fault());
+        assert!(diag.with_ina_pv_fault(false).ina_batt_fault());
+
+        // When — encoded into a frame and decoded back
+        let telem = Telemetry {
+            diagnostics: diag,
+            ..Telemetry::empty()
+        };
+        let decoded = Telemetry::decode(&telem.encode())?;
+
+        // Then
+        assert!(decoded.diagnostics.ina_pv_fault());
+        assert!(decoded.diagnostics.ina_batt_fault());
 
         Ok(())
     }
@@ -935,6 +1074,7 @@ mod tests {
             b15 in any::<u8>(),
             b16 in any::<u8>(),
             b17 in any::<u8>(),
+            power in proptest::array::uniform8(any::<u8>()),
         ) {
             let mut bytes = [0_u8; FRAME_LEN];
             bytes[0] = FRAME_VERSION;
@@ -960,10 +1100,13 @@ mod tests {
             // lux: a non-sentinel rain value would scale/round-trip but not bit-exact.
             bytes[17] = 0xFF;
             bytes[18] = 0xFF;
-            // Diagnostics is the trailing byte 19 in v3.
+            // Diagnostics is byte 19 in v4.
             bytes[19] = b17;
+            // Power fields (bytes 20–27) are raw u16 with no scaling: every value —
+            // including the u16::MAX sentinel — round-trips bit-exact.
+            bytes[20..28].copy_from_slice(&power);
 
-            let decoded = Telemetry::decode(&bytes).expect("valid v3 frame must decode");
+            let decoded = Telemetry::decode(&bytes).expect("valid v4 frame must decode");
             let re_encoded = decoded.encode();
             prop_assert_eq!(bytes, re_encoded);
         }

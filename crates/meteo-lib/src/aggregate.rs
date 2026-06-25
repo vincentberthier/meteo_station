@@ -54,9 +54,19 @@ pub enum SensorReading {
     /// Rain gauge: rainfall rate in mm/h over the sliding window. `None` while the
     /// window is still filling (no value beats a wrong, extrapolated one).
     Rain { rate_mm_h: Option<f32> },
+    /// PV-side INA219 (U6 @ 0x40): panel voltage (mV) + harvest current (mA, ≥ 0).
+    SolarPower { mv: u16, ma: u16 },
+    /// PV-side INA219 down: blanks solar V/I, raises `INA_PV_FAULT`.
+    SolarPowerFault,
+    /// Battery-side INA219 (U7 @ 0x41): battery voltage (mV) + load current (mA, ≥ 0).
+    /// Battery percent is derived from `mv` by the aggregator.
+    BatteryPower { mv: u16, ma: u16 },
+    /// Battery-side INA219 down: blanks battery V / load I / percent, raises `INA_BATT_FAULT`.
+    BatteryPowerFault,
     // TODO: the weather-meter inputs have no fault/diagnostics flags yet — a calm
     // anemometer, a disconnected vane, and a dry rain gauge all read as plausible
-    // zeros/headings. Allocate diagnostics bits (6–7 reserved) once needed.
+    // zeros/headings. No diagnostics bits remain free (0–7 all assigned); add a
+    // second diagnostics byte to the frame if these ever need flags.
 }
 
 /// Configuration for the aggregator.
@@ -93,6 +103,8 @@ pub struct Aggregator {
     bme_fault: bool,
     veml_fault: bool,
     mlx_fault: bool,
+    ina_pv_fault: bool,
+    ina_batt_fault: bool,
     cfg: AggregatorConfig,
 }
 
@@ -110,12 +122,14 @@ impl Aggregator {
             bme_fault: false,
             veml_fault: false,
             mlx_fault: false,
+            ina_pv_fault: false,
+            ina_batt_fault: false,
             cfg,
         }
     }
 
     /// Fold one reading into the running state.
-    pub const fn ingest(&mut self, reading: SensorReading) {
+    pub fn ingest(&mut self, reading: SensorReading) {
         match reading {
             SensorReading::Barometer {
                 temperature_c,
@@ -178,6 +192,28 @@ impl Aggregator {
             SensorReading::Rain { rate_mm_h } => {
                 self.telemetry.rain_rate_mm_h = rate_mm_h;
             }
+            SensorReading::SolarPower { mv, ma } => {
+                self.telemetry.solar_mv = Some(mv);
+                self.telemetry.solar_ma = Some(ma);
+                self.ina_pv_fault = false;
+            }
+            SensorReading::SolarPowerFault => {
+                self.telemetry.solar_mv = None;
+                self.telemetry.solar_ma = None;
+                self.ina_pv_fault = true;
+            }
+            SensorReading::BatteryPower { mv, ma } => {
+                self.telemetry.batt_mv = Some(mv);
+                self.telemetry.load_ma = Some(ma);
+                self.telemetry.battery_pct = Some(crate::battery::battery_pct_from_mv(mv));
+                self.ina_batt_fault = false;
+            }
+            SensorReading::BatteryPowerFault => {
+                self.telemetry.batt_mv = None;
+                self.telemetry.load_ma = None;
+                self.telemetry.battery_pct = None;
+                self.ina_batt_fault = true;
+            }
         }
     }
 
@@ -191,7 +227,9 @@ impl Aggregator {
             .with_bme280_fault(self.bme_fault)
             .with_veml7700_fault(self.veml_fault)
             .with_baro_divergence(self.diverged())
-            .with_mlx90614_fault(self.mlx_fault);
+            .with_mlx90614_fault(self.mlx_fault)
+            .with_ina_pv_fault(self.ina_pv_fault)
+            .with_ina_batt_fault(self.ina_batt_fault);
         t
     }
 
@@ -530,6 +568,76 @@ mod tests {
 
         // Then — mlx_fault is cleared
         assert!(!snap_clear.diagnostics.mlx90614_fault());
+    }
+
+    #[test]
+    fn aggregator_solar_power_populates_fields() {
+        // Given
+        let mut agg = Aggregator::new(TEST_CFG);
+
+        // When
+        agg.ingest(SensorReading::SolarPower {
+            mv: 15_000,
+            ma: 600,
+        });
+        let snap = agg.snapshot();
+
+        // Then
+        assert_eq!(snap.solar_mv, Some(15_000));
+        assert_eq!(snap.solar_ma, Some(600));
+        assert!(!snap.diagnostics.ina_pv_fault());
+    }
+
+    #[test]
+    fn aggregator_solar_fault_blanks_and_sets_bit() {
+        // Given — good reading then fault
+        let mut agg = Aggregator::new(TEST_CFG);
+
+        // When
+        agg.ingest(SensorReading::SolarPower {
+            mv: 15_000,
+            ma: 600,
+        });
+        agg.ingest(SensorReading::SolarPowerFault);
+        let snap = agg.snapshot();
+
+        // Then
+        assert_eq!(snap.solar_mv, None);
+        assert_eq!(snap.solar_ma, None);
+        assert!(snap.diagnostics.ina_pv_fault());
+    }
+
+    #[test]
+    fn aggregator_battery_power_derives_percent() {
+        // Given
+        let mut agg = Aggregator::new(TEST_CFG);
+
+        // When — 3840 mV is the 50 % breakpoint on the 1S-LiPo curve
+        agg.ingest(SensorReading::BatteryPower { mv: 3_840, ma: 120 });
+        let snap = agg.snapshot();
+
+        // Then
+        assert_eq!(snap.batt_mv, Some(3_840));
+        assert_eq!(snap.load_ma, Some(120));
+        assert_eq!(snap.battery_pct, Some(50));
+        assert!(!snap.diagnostics.ina_batt_fault());
+    }
+
+    #[test]
+    fn aggregator_battery_fault_blanks_percent_and_sets_bit() {
+        // Given — good reading then fault
+        let mut agg = Aggregator::new(TEST_CFG);
+
+        // When
+        agg.ingest(SensorReading::BatteryPower { mv: 3_900, ma: 100 });
+        agg.ingest(SensorReading::BatteryPowerFault);
+        let snap = agg.snapshot();
+
+        // Then
+        assert_eq!(snap.batt_mv, None);
+        assert_eq!(snap.load_ma, None);
+        assert_eq!(snap.battery_pct, None);
+        assert!(snap.diagnostics.ina_batt_fault());
     }
 
     #[test]
