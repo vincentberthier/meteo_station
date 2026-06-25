@@ -132,8 +132,10 @@ COMPS = [
     ("R3",  "Device:R",                     "4.75k",                360, 105,{'1':'V3V3', '2':'SDA'}),
     ("R4",  "Device:R",                     "4.75k",                378, 105,{'1':'V3V3', '2':'SCL'}),
     # I2C sensors
-    ("U4",  "Connector_Generic:Conn_01x04", "BMP388 0x76",          305, 150,{'1':'V3V3','2':'GND','3':'SDA','4':'SCL'}),
+    ("U4",  "Connector_Generic:Conn_01x04", "BMP388 0x77",          305, 150,{'1':'V3V3','2':'GND','3':'SDA','4':'SCL'}),
     ("U5",  "Connector_Generic:Conn_01x04", "MLX90614 0x5A",        375, 150,{'1':'V3V3','2':'GND','3':'SDA','4':'SCL'}),
+    ("U8",  "Connector_Generic:Conn_01x04", "BME280 0x76",          220, 110,{'1':'V3V3','2':'GND','3':'SDA','4':'SCL'}),
+    ("U9",  "Connector_Generic:Conn_01x04", "VEML7700 0x10",        220, 160,{'1':'V3V3','2':'GND','3':'SDA','4':'SCL'}),
     # decoupling / bulk
     ("C1",  "Device:C_Polarized",           "22uF",                 140, 115,{'1':'VLOAD','2':'GND'}),
     ("C2",  "Device:C_Polarized",           "100uF",                280, 105,{'1':'V5','2':'GND'}),
@@ -159,6 +161,7 @@ NOTES = [
     (42, 267, 1.6, "C5 100nF  - across BMP388 VCC-GND, hard against the chip's pins"),
     (42, 273, 1.6, "C6 100nF  - across MLX90614 VCC-GND, hard against the chip's pins"),
     (42, 281, 1.6, "Rule: a 100nF sits right at each chip; bulk caps go where current steps (boost out, radio, regulator)."),
+    (150, 245, 1.6, "U8 BME280 & U9 VEML7700 are breakout modules (onboard decoupling); only the bare MLX90614 needs its external 100nF."),
 ]
 
 G = 1.27  # KiCad connection grid (50 mil)
