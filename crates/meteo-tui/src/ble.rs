@@ -8,6 +8,8 @@
 // All public items are consumed by the app wiring added in substep 7.
 #![allow(dead_code, reason = "consumed by main.rs wiring in substep 7")]
 
+use std::collections::HashMap;
+
 use futures::StreamExt as _;
 use meteo_lib::{FRAME_LEN, Telemetry};
 use tokio::sync::mpsc;
@@ -44,6 +46,27 @@ const fn dis_service_uuid() -> uuid::Uuid {
 /// Firmware Revision String characteristic UUID (0x2A26).
 const fn fw_rev_uuid() -> uuid::Uuid {
     uuid16(0x2A26)
+}
+
+// ── Passive-scan helpers (substep 6) ─────────────────────────────────────────
+
+/// Bluetooth Company Identifier used by the firmware in manufacturer-specific
+/// advertising data (`0xFFFF` = reserved for testing / internal use).
+///
+/// TODO(substep 7): remove once app/ui/main migrate to SignalState/passive-scan
+const COMPANY_ID: u16 = 0xFFFF;
+
+/// Decode a telemetry frame from a BLE advertisement's manufacturer-data map.
+///
+/// Returns `Some(Telemetry)` when `mfg` contains an entry for [`COMPANY_ID`]
+/// whose payload is exactly [`FRAME_LEN`] bytes and passes `Telemetry::decode`.
+/// Returns `None` on any mismatch (wrong company, wrong length, decode error).
+pub fn decode_frame(mfg: &HashMap<u16, Vec<u8>>) -> Option<Telemetry> {
+    let payload = mfg.get(&COMPANY_ID)?;
+    if payload.len() != FRAME_LEN {
+        return None;
+    }
+    Telemetry::decode(payload).ok()
 }
 
 // ── Public surface ────────────────────────────────────────────────────────────
@@ -191,10 +214,10 @@ async fn scan_for(
     let scan = async {
         let mut events = adapter.discover_devices().await.ok()?;
         while let Some(ev) = events.next().await {
-            if let bluer::AdapterEvent::DeviceAdded(a) = ev {
-                if a == addr {
-                    return adapter.device(addr).ok();
-                }
+            if let bluer::AdapterEvent::DeviceAdded(a) = ev
+                && a == addr
+            {
+                return adapter.device(addr).ok();
             }
         }
         None
@@ -259,3 +282,74 @@ async fn read_fw_version(device: &bluer::Device) -> Option<String> {
     }
     None
 }
+
+// grcov exclude start
+#[expect(clippy::panic_in_result_fn, reason = "test module")]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "TestResult is the standard test pattern"
+)]
+#[cfg(test)]
+mod tests {
+    use core::{error, result};
+
+    use test_log::test;
+
+    use super::*;
+
+    type TestResult = result::Result<(), Box<dyn error::Error>>;
+
+    #[test]
+    fn decode_frame_accepts_valid_company_payload() -> TestResult {
+        // Given — a valid v5 frame encoded from a Telemetry with uptime_s = 7
+        let telem = Telemetry {
+            uptime_s: 7,
+            ..Telemetry::empty()
+        };
+        let encoded = telem.encode();
+        let mut mfg = HashMap::new();
+        mfg.insert(COMPANY_ID, encoded.to_vec());
+
+        // When
+        let result = decode_frame(&mfg);
+
+        // Then
+        let decoded = result.ok_or("expected Some(Telemetry), got None")?;
+        assert_eq!(decoded.uptime_s, 7);
+        Ok(())
+    }
+
+    #[test]
+    fn decode_frame_rejects_wrong_company() -> TestResult {
+        // Given — payload under a different company ID
+        let telem = Telemetry {
+            uptime_s: 7,
+            ..Telemetry::empty()
+        };
+        let encoded = telem.encode();
+        let mut mfg = HashMap::new();
+        mfg.insert(0x0059_u16, encoded.to_vec()); // Nordic Semiconductor, not 0xFFFF
+
+        // When
+        let result = decode_frame(&mfg);
+
+        // Then
+        assert!(result.is_none(), "expected None for wrong company ID");
+        Ok(())
+    }
+
+    #[test]
+    fn decode_frame_rejects_wrong_length() -> TestResult {
+        // Given — correct company ID but payload is too short
+        let mut mfg = HashMap::new();
+        mfg.insert(COMPANY_ID, vec![0_u8; 10]);
+
+        // When
+        let result = decode_frame(&mfg);
+
+        // Then
+        assert!(result.is_none(), "expected None for wrong-length payload");
+        Ok(())
+    }
+}
+// grcov exclude stop

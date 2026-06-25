@@ -6,6 +6,7 @@
 #![allow(dead_code, reason = "consumed by BLE, UI, and app substeps")]
 
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 use meteo_lib::Diagnostics;
 
@@ -71,6 +72,61 @@ impl ConnState {
             Self::Live => "Live",
             Self::Reconnecting => "Reconnecting",
         }
+    }
+}
+
+/// Dashboard signal state derived purely from frame age (no link-layer state).
+///
+/// NOTE: substep 7 replaces [`ConnState`] with this in the app/ui; this item is
+/// additive and coexists with [`ConnState`] until then.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignalState {
+    /// No frame has been received yet.
+    NoSignal,
+    /// The last frame arrived within `stale_after`.
+    Live,
+    /// Frames have been seen, but the latest is older than `stale_after`.
+    Stale,
+}
+
+impl SignalState {
+    /// Derive the state from the last-frame timestamp.
+    ///
+    /// `stale_after` is passed as a parameter so `model` does not depend on
+    /// `app::STALE_AFTER`.
+    #[must_use]
+    pub fn from_age(last_frame_at: Option<Instant>, now: Instant, stale_after: Duration) -> Self {
+        match last_frame_at {
+            None => Self::NoSignal,
+            Some(t) if now.duration_since(t) > stale_after => Self::Stale,
+            Some(_) => Self::Live,
+        }
+    }
+
+    /// Status-bar label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::NoSignal => "No signal",
+            Self::Live => "Live",
+            Self::Stale => "Stale",
+        }
+    }
+}
+
+/// Format the station location row.
+///
+/// Returns `"not set"` until both latitude and longitude are present; otherwise
+/// `"{lat:.2}, {lon:.2}"` or `"{lat:.2}, {lon:.2}, {alt:.0} m"` when altitude
+/// is also set. Coarse values render at 2 decimals (lat/lon, ~1 km precision).
+#[must_use]
+pub fn fmt_location(lat: Option<f32>, lon: Option<f32>, alt: Option<f32>) -> String {
+    match (lat, lon) {
+        (Some(la), Some(lo)) => alt.map_or_else(
+            || format!("{la:.2}, {lo:.2}"),
+            |a| format!("{la:.2}, {lo:.2}, {a:.0} m"),
+        ),
+        _ => "not set".to_owned(),
     }
 }
 
@@ -948,6 +1004,84 @@ mod tests {
 
         // Then
         assert_eq!(result, None);
+        Ok(())
+    }
+
+    // --- SignalState tests ---
+
+    #[test]
+    fn signal_state_no_signal() -> TestResult {
+        // Given
+        let now = Instant::now();
+
+        // When
+        let state = SignalState::from_age(None, now, Duration::from_secs(5));
+
+        // Then
+        assert_eq!(state, SignalState::NoSignal);
+        Ok(())
+    }
+
+    #[test]
+    fn signal_state_live() -> TestResult {
+        // Given
+        let now = Instant::now();
+
+        // When — frame received exactly at `now`; age is zero, within stale_after
+        let state = SignalState::from_age(Some(now), now, Duration::from_secs(5));
+
+        // Then
+        assert_eq!(state, SignalState::Live);
+        Ok(())
+    }
+
+    #[test]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "test: Instant + Duration cannot overflow in practice"
+    )]
+    fn signal_state_stale() -> TestResult {
+        // Given — simulate a frame received 10 s in the past by advancing `now`
+        let base = Instant::now();
+        let later = base + Duration::from_secs(10);
+
+        // When
+        let state = SignalState::from_age(Some(base), later, Duration::from_secs(5));
+
+        // Then
+        assert_eq!(state, SignalState::Stale);
+        Ok(())
+    }
+
+    #[test]
+    fn signal_state_labels() -> TestResult {
+        // Given / When / Then
+        assert_eq!(SignalState::NoSignal.label(), "No signal");
+        assert_eq!(SignalState::Live.label(), "Live");
+        assert_eq!(SignalState::Stale.label(), "Stale");
+        Ok(())
+    }
+
+    // --- fmt_location tests ---
+
+    #[test]
+    fn fmt_location_set() -> TestResult {
+        // Given / When / Then — both lat and lon present, with altitude
+        assert_eq!(
+            fmt_location(Some(48.85), Some(2.35), Some(35.0)),
+            "48.85, 2.35, 35 m"
+        );
+        // Without altitude
+        assert_eq!(fmt_location(Some(48.85), Some(2.35), None), "48.85, 2.35");
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_location_unset() -> TestResult {
+        // Given / When / Then — missing lat or lon → "not set"
+        assert_eq!(fmt_location(None, None, None), "not set");
+        assert_eq!(fmt_location(Some(48.85), None, Some(35.0)), "not set");
+        assert_eq!(fmt_location(None, Some(2.35), None), "not set");
         Ok(())
     }
 }
