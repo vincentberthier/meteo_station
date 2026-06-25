@@ -14,6 +14,7 @@
 use libm::fabsf;
 
 use crate::ble::frame::{Diagnostics, Telemetry};
+use crate::ble::location::Location;
 
 /// A reading (or health signal) from one sensor, sent over the inter-task
 /// channel to the aggregator.
@@ -63,6 +64,9 @@ pub enum SensorReading {
     BatteryPower { mv: u16, ma: u16 },
     /// Battery-side INA219 down: blanks battery V / load I / percent, raises `INA_BATT_FAULT`.
     BatteryPowerFault,
+    /// Station location set over BLE or restored from flash. Sets the three frame
+    /// location fields. (No fault variant: location is config, not a live sensor.)
+    Location(Location),
     // TODO: the weather-meter inputs have no fault/diagnostics flags yet — a calm
     // anemometer, a disconnected vane, and a dry rain gauge all read as plausible
     // zeros/headings. No diagnostics bits remain free (0–7 all assigned); add a
@@ -213,6 +217,11 @@ impl Aggregator {
                 self.telemetry.load_ma = None;
                 self.telemetry.battery_pct = None;
                 self.ina_batt_fault = true;
+            }
+            SensorReading::Location(loc) => {
+                self.telemetry.latitude_deg = Some(loc.latitude_deg);
+                self.telemetry.longitude_deg = Some(loc.longitude_deg);
+                self.telemetry.altitude_m = Some(loc.altitude_m);
             }
         }
     }
@@ -717,6 +726,47 @@ mod tests {
 
         // Then — cannot determine → not diverged
         assert!(!snap.diagnostics.baro_divergence());
+    }
+
+    #[test]
+    fn aggregator_location_sets_three_fields() {
+        // Given
+        let mut agg = Aggregator::new(TEST_CFG);
+        let loc = crate::ble::location::Location {
+            latitude_deg: 48.85,
+            longitude_deg: 2.35,
+            altitude_m: 35.0,
+        };
+
+        // When
+        agg.ingest(SensorReading::Location(loc));
+        let snap = agg.snapshot();
+
+        // Then — all three location fields are populated within coarse LSB tolerance
+        assert!(
+            snap.latitude_deg.is_some(),
+            "latitude_deg must be Some after Location ingest"
+        );
+        assert!(
+            snap.longitude_deg.is_some(),
+            "longitude_deg must be Some after Location ingest"
+        );
+        assert!(
+            snap.altitude_m.is_some(),
+            "altitude_m must be Some after Location ingest"
+        );
+        assert!(
+            (snap.latitude_deg.unwrap_or(f32::NAN) - 48.85).abs() <= 0.01,
+            "latitude_deg mismatch"
+        );
+        assert!(
+            (snap.longitude_deg.unwrap_or(f32::NAN) - 2.35).abs() <= 0.01,
+            "longitude_deg mismatch"
+        );
+        assert!(
+            (snap.altitude_m.unwrap_or(f32::NAN) - 35.0).abs() <= 1.0,
+            "altitude_m mismatch"
+        );
     }
 
     #[test]

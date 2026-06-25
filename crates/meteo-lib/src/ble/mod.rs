@@ -3,3 +3,4 @@
 //! removed in the ESP32-H2 port — on-chip BLE replaces it.)
 
 pub mod frame;
+pub mod location;
