@@ -6,7 +6,7 @@ use core::sync::atomic::Ordering;
 use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
-use embassy_time::{Duration, Ticker};
+use embassy_time::{Duration, Instant, Ticker};
 use meteo_lib::aggregate::AggregatorConfig;
 use meteo_lib::{Aggregator, SensorReading};
 
@@ -48,7 +48,15 @@ pub async fn run() {
         match select(SENSOR_CHANNEL.receive(), publish.next()).await {
             Either::First(reading) => agg.ingest(reading),
             Either::Second(()) => {
-                TELEMETRY.signal(agg.snapshot());
+                let mut snap = agg.snapshot();
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "u32 holds ~136 y of seconds"
+                )]
+                {
+                    snap.uptime_s = Instant::now().as_secs() as u32;
+                }
+                TELEMETRY.signal(snap);
                 AGG_BEAT.fetch_add(1, Ordering::Relaxed);
             }
         }
