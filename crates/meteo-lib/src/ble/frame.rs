@@ -5,20 +5,24 @@
     reason = "defmt::Format macro expansion triggers this lint as a false positive"
 )]
 
-//! Telemetry wire frame v4 — fixed-length, little-endian, 28 bytes.
+//! Telemetry wire frame v5 — fixed-length, little-endian, 38 bytes.
 //!
 //! All multi-byte fields are encoded **little-endian**; the BLE central must
 //! decode them accordingly.
 //!
-//! v4 extends v3 by appending the four power fields (bytes 20–27) and assigning
-//! the two previously-reserved diagnostics bits to the INA219 faults. Bytes 0–19
-//! are byte-for-byte identical to v3.
+//! v5 extends v4 by appending `uptime_s` (bytes 28–31) and three coarse
+//! location fields: latitude (bytes 32–33), longitude (bytes 34–35), altitude
+//! (bytes 36–37). Bytes 0–27 are byte-for-byte identical to v4.
+//!
+//! v4 extended v3 by appending the four power fields (bytes 20–27) and
+//! assigning the two previously-reserved diagnostics bits to the INA219 faults.
+//! Bytes 0–19 are byte-for-byte identical to v3.
 //!
 //! # Frame layout
 //!
 //! | Off   | Field               | Wire type | Encoding                                                                    | Sentinel (None)    |
 //! |-------|---------------------|-----------|-----------------------------------------------------------------------------|--------------------|
-//! | 0     | version             | u8        | [`FRAME_VERSION`] (= 4)                                                     | —                  |
+//! | 0     | version             | u8        | [`FRAME_VERSION`] (= 5)                                                     | —                  |
 //! | 1–2   | temperature         | i16 LE    | round(°C × 100) centi-°C                                                    | `i16::MIN`         |
 //! | 3–4   | pressure            | u16 LE    | round(hPa × 10) deci-hPa                                                   | `u16::MAX`         |
 //! | 5–6   | humidity            | u16 LE    | round(%RH × 100) centi-%RH                                                  | `u16::MAX`         |
@@ -34,14 +38,18 @@
 //! | 22–23 | solar current       | u16 LE    | milliamps (PV-side harvest current, clamped ≥ 0)                            | `u16::MAX`         |
 //! | 24–25 | battery voltage     | u16 LE    | millivolts (battery-side INA219 bus voltage)                               | `u16::MAX`         |
 //! | 26–27 | load current        | u16 LE    | milliamps (battery-side load current, clamped ≥ 0)                          | `u16::MAX`         |
+//! | 28–31 | uptime              | u32 LE    | seconds since boot (monotonic, resets on reboot); always present            | —                  |
+//! | 32–33 | latitude            | i16 LE    | round(deg × 100) coarse ~1 km; `i16::MIN` = not set                        | `i16::MIN`         |
+//! | 34–35 | longitude           | i16 LE    | round(deg × 100) coarse ~1 km; `i16::MIN` = not set                        | `i16::MIN`         |
+//! | 36–37 | altitude            | i16 LE    | round(m × 1) coarse 1 m; `i16::MIN` = not set                              | `i16::MIN`         |
 
 /// Wire-format version tag written to byte 0 of every frame.
-pub const FRAME_VERSION: u8 = 4;
+pub const FRAME_VERSION: u8 = 5;
 
-/// Total length (in bytes) of a v4 telemetry frame.
-pub const FRAME_LEN: usize = 28;
+/// Total length (in bytes) of a v5 telemetry frame.
+pub const FRAME_LEN: usize = 38;
 
-/// Per-frame health/diagnostics bitfield (frame v4, byte 19).
+/// Per-frame health/diagnostics bitfield (frame v5, byte 19).
 ///
 /// Bit 0 = sky-IR sensor ambient diverges from the barometer air temperature
 /// beyond the configured threshold (possible occlusion / icing).
@@ -191,7 +199,7 @@ impl Diagnostics {
 /// All sensor readings bundled for one telemetry update.
 ///
 /// Every sensor field is `Option<_>`; `None` encodes to the field's sentinel value and
-/// decodes back to `None`. The `diagnostics` field is always present.
+/// decodes back to `None`. The `diagnostics` and `uptime_s` fields are always present.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Telemetry {
@@ -221,8 +229,16 @@ pub struct Telemetry {
     pub batt_mv: Option<u16>,
     /// Load current in milliamps (battery-side INA219).
     pub load_ma: Option<u16>,
-    /// Per-frame diagnostics bitfield (frame v4).
+    /// Per-frame diagnostics bitfield (frame v5).
     pub diagnostics: Diagnostics,
+    /// Seconds since boot (monotonic, resets on reboot). Always present.
+    pub uptime_s: u32,
+    /// Station latitude in degrees, coarse ~1 km (0.01° steps). `None` until set.
+    pub latitude_deg: Option<f32>,
+    /// Station longitude in degrees, coarse ~1 km (0.01° steps). `None` until set.
+    pub longitude_deg: Option<f32>,
+    /// Station altitude in metres (1 m steps). `None` until set.
+    pub altitude_m: Option<f32>,
 }
 
 /// Errors returned by [`Telemetry::decode`].
@@ -265,6 +281,10 @@ impl Telemetry {
             batt_mv: None,
             load_ma: None,
             diagnostics: Diagnostics::empty(),
+            uptime_s: 0,
+            latitude_deg: None,
+            longitude_deg: None,
+            altitude_m: None,
         }
     }
 
@@ -282,7 +302,7 @@ impl Telemetry {
         }
     }
 
-    /// Serialises this reading to the fixed 28-byte v4 wire frame.
+    /// Serialises this reading to the fixed 38-byte v5 wire frame.
     ///
     /// All multi-byte fields are little-endian. `None` fields encode to their
     /// respective sentinels (see module-level table).
@@ -325,10 +345,15 @@ impl Telemetry {
         frame[24..26].copy_from_slice(&self.batt_mv.unwrap_or(u16::MAX).to_le_bytes());
         frame[26..28].copy_from_slice(&self.load_ma.unwrap_or(u16::MAX).to_le_bytes());
 
+        frame[28..32].copy_from_slice(&self.uptime_s.to_le_bytes());
+        frame[32..34].copy_from_slice(&scale_loc_i16(self.latitude_deg, 100.0).to_le_bytes());
+        frame[34..36].copy_from_slice(&scale_loc_i16(self.longitude_deg, 100.0).to_le_bytes());
+        frame[36..38].copy_from_slice(&scale_loc_i16(self.altitude_m, 1.0).to_le_bytes());
+
         frame
     }
 
-    /// Parses a v4 wire frame, mapping sentinels back to `None`.
+    /// Parses a v5 wire frame, mapping sentinels back to `None`.
     ///
     /// # Errors
     ///
@@ -337,6 +362,10 @@ impl Telemetry {
     #[expect(
         clippy::similar_names,
         reason = "solar_mv/solar_ma (and batt_mv) differ only by the domain mv/ma suffix"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "decode mirrors the flat wire layout; splitting would obscure field correspondence"
     )]
     pub fn decode(bytes: &[u8]) -> Result<Self, FrameError> {
         if bytes.len() != FRAME_LEN {
@@ -433,6 +462,11 @@ impl Telemetry {
         let batt_mv = decode_u16_opt([bytes[24], bytes[25]]);
         let load_ma = decode_u16_opt([bytes[26], bytes[27]]);
 
+        let uptime_s = u32::from_le_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]);
+        let latitude_deg = decode_loc(i16::from_le_bytes([bytes[32], bytes[33]]), 100.0);
+        let longitude_deg = decode_loc(i16::from_le_bytes([bytes[34], bytes[35]]), 100.0);
+        let altitude_m = decode_loc(i16::from_le_bytes([bytes[36], bytes[37]]), 1.0);
+
         Ok(Self {
             temperature_c,
             pressure_hpa,
@@ -448,6 +482,10 @@ impl Telemetry {
             batt_mv,
             load_ma,
             diagnostics,
+            uptime_s,
+            latitude_deg,
+            longitude_deg,
+            altitude_m,
         })
     }
 }
@@ -456,6 +494,30 @@ impl Telemetry {
 const fn decode_u16_opt(bytes: [u8; 2]) -> Option<u16> {
     let raw = u16::from_le_bytes(bytes);
     if raw == u16::MAX { None } else { Some(raw) }
+}
+
+/// Decodes a little-endian `i16` location field: `i16::MIN` → `None`, else raw / factor.
+fn decode_loc(raw: i16, factor: f32) -> Option<f32> {
+    if raw == i16::MIN {
+        None
+    } else {
+        Some(f32::from(raw) / factor)
+    }
+}
+
+/// Scales an optional degrees/metres value to the coarse i16 wire form, clamping
+/// away from the `i16::MIN` sentinel; `None` → `i16::MIN`.
+fn scale_loc_i16(v: Option<f32>, factor: f32) -> i16 {
+    v.map_or(i16::MIN, |x| {
+        let r = libm::roundf(x * factor);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "clamped to i16 range before cast"
+        )]
+        {
+            r.max(f32::from(i16::MIN) + 1.0).min(f32::from(i16::MAX)) as i16
+        }
+    })
 }
 
 /// Encodes `lux` as `(mantissa, exponent)` such that `mantissa × 10^exponent ≈ lux`
@@ -581,7 +643,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn encode_emits_twenty_eight_bytes_with_version_four() {
+    fn encode_emits_thirty_eight_bytes_with_version_five() {
         // Given
         let telem = Telemetry::empty();
 
@@ -589,8 +651,8 @@ mod tests {
         let frame = telem.encode();
 
         // Then
-        assert_eq!(frame.len(), 28);
-        assert_eq!(frame[0], 4);
+        assert_eq!(frame.len(), 38);
+        assert_eq!(frame[0], 5);
     }
 
     #[test]
@@ -625,6 +687,10 @@ mod tests {
         assert_eq!(&frame[22..24], &u16::MAX.to_le_bytes());
         assert_eq!(&frame[24..26], &u16::MAX.to_le_bytes());
         assert_eq!(&frame[26..28], &u16::MAX.to_le_bytes());
+        // location sentinels: i16::MIN as LE
+        assert_eq!(&frame[32..34], &i16::MIN.to_le_bytes());
+        assert_eq!(&frame[34..36], &i16::MIN.to_le_bytes());
+        assert_eq!(&frame[36..38], &i16::MIN.to_le_bytes());
     }
 
     #[test]
@@ -659,7 +725,7 @@ mod tests {
         // When
         let frame = telem.encode();
 
-        // Then — diagnostics is byte 19 in v4
+        // Then — diagnostics is byte 19 in v5
         assert_eq!(frame[19], 0x01);
     }
 
@@ -669,34 +735,34 @@ mod tests {
 
     #[test]
     fn decode_rejects_wrong_length() {
-        // Given — 20 bytes was the v3 length; v4 requires 28
-        let short20 = [0_u8; 20];
+        // Given — 28 bytes was the v4 length; v5 requires 38
+        let short28 = [0_u8; 28];
 
         // When
-        let result = Telemetry::decode(&short20);
+        let result = Telemetry::decode(&short28);
 
         // Then
-        assert_eq!(result, Err(FrameError::WrongLength(20)));
+        assert_eq!(result, Err(FrameError::WrongLength(28)));
 
-        // Also check 27 bytes (one short of v4)
-        let short27 = [0_u8; 27];
+        // Also check 37 bytes (one short of v5)
+        let short37 = [0_u8; 37];
         assert_eq!(
-            Telemetry::decode(&short27),
-            Err(FrameError::WrongLength(27))
+            Telemetry::decode(&short37),
+            Err(FrameError::WrongLength(37))
         );
     }
 
     #[test]
     fn decode_rejects_unknown_version() {
-        // Given — 28 bytes with version byte = 5 (4 is now valid; 5 is unknown)
-        let mut frame = [0_u8; 28];
-        frame[0] = 5;
+        // Given — 38 bytes with version byte = 6 (5 is now valid; 6 is unknown)
+        let mut frame = [0_u8; 38];
+        frame[0] = 6;
 
         // When
         let result = Telemetry::decode(&frame);
 
         // Then
-        assert_eq!(result, Err(FrameError::UnknownVersion(5)));
+        assert_eq!(result, Err(FrameError::UnknownVersion(6)));
     }
 
     #[test]
@@ -723,6 +789,10 @@ mod tests {
         assert_eq!(decoded.batt_mv, None);
         assert_eq!(decoded.load_ma, None);
         assert_eq!(decoded.diagnostics, Diagnostics::empty());
+        assert_eq!(decoded.uptime_s, 0);
+        assert_eq!(decoded.latitude_deg, None);
+        assert_eq!(decoded.longitude_deg, None);
+        assert_eq!(decoded.altitude_m, None);
 
         Ok(())
     }
@@ -861,6 +931,79 @@ mod tests {
 
         // Then
         assert!(decoded.diagnostics.occlusion());
+
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // uptime + location
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn uptime_roundtrips_value() -> TestResult {
+        // Given
+        let telem = Telemetry {
+            uptime_s: 123_456,
+            ..Telemetry::empty()
+        };
+
+        // When
+        let frame = telem.encode();
+        let decoded = Telemetry::decode(&frame)?;
+
+        // Then — uptime round-trips exactly
+        assert_eq!(decoded.uptime_s, 123_456);
+        // And bytes 28–31 match the LE encoding
+        assert_eq!(&frame[28..32], &123_456_u32.to_le_bytes());
+
+        Ok(())
+    }
+
+    #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "test: location values known to be Some after encode/decode"
+    )]
+    fn location_roundtrips_within_coarse_resolution() -> TestResult {
+        // Given — Paris coordinates + moderate altitude
+        let telem = Telemetry {
+            latitude_deg: Some(48.853),
+            longitude_deg: Some(2.349),
+            altitude_m: Some(35.0),
+            ..Telemetry::empty()
+        };
+
+        // When
+        let frame = telem.encode();
+        let decoded = Telemetry::decode(&frame)?;
+
+        // Then — within one coarse LSB
+        assert!((decoded.latitude_deg.unwrap() - 48.853).abs() <= 0.01);
+        assert!((decoded.longitude_deg.unwrap() - 2.349).abs() <= 0.01);
+        assert!((decoded.altitude_m.unwrap() - 35.0).abs() <= 1.0);
+
+        // And bytes 32–33 == round(48.853 * 100) = 4885 as i16 LE
+        assert_eq!(&frame[32..34], &4885_i16.to_le_bytes());
+
+        Ok(())
+    }
+
+    #[test]
+    fn location_sentinels_decode_to_none() -> TestResult {
+        // Given — Telemetry::empty() has None for all location fields
+        let telem = Telemetry::empty();
+
+        // When
+        let frame = telem.encode();
+        let decoded = Telemetry::decode(&frame)?;
+
+        // Then — encoded as i16::MIN and decoded back to None
+        assert_eq!(&frame[32..34], &i16::MIN.to_le_bytes());
+        assert_eq!(&frame[34..36], &i16::MIN.to_le_bytes());
+        assert_eq!(&frame[36..38], &i16::MIN.to_le_bytes());
+        assert_eq!(decoded.latitude_deg, None);
+        assert_eq!(decoded.longitude_deg, None);
+        assert_eq!(decoded.altitude_m, None);
 
         Ok(())
     }
@@ -1056,10 +1199,13 @@ mod tests {
         #[test]
         #[expect(clippy::expect_used, reason = "proptest: inputs are constructed to always succeed")]
         fn roundtrip_decode_encode_is_identity_at_wire_level(
-            // Generate random bytes for a valid v2 frame; force lux to sentinel
+            // Generate random bytes for a valid v5 frame; force lux to sentinel
             // (mantissa = u16::MAX, exponent = 0) so lux is None on both sides.
             // When lux is None, encode always writes exponent=0, so we must use
             // exponent=0 here to get a bit-exact roundtrip.
+            // Rain rate is also forced to sentinel for the same reason.
+            // Location bytes 32–37 are forced to i16::MIN sentinel: the coarse
+            // scaling is not guaranteed to be bit-exact for arbitrary i16 values.
             b1 in any::<u8>(),
             b2 in any::<u8>(),
             b3 in any::<u8>(),
@@ -1075,6 +1221,7 @@ mod tests {
             b16 in any::<u8>(),
             b17 in any::<u8>(),
             power in proptest::array::uniform8(any::<u8>()),
+            uptime in proptest::array::uniform4(any::<u8>()),
         ) {
             let mut bytes = [0_u8; FRAME_LEN];
             bytes[0] = FRAME_VERSION;
@@ -1100,19 +1247,30 @@ mod tests {
             // lux: a non-sentinel rain value would scale/round-trip but not bit-exact.
             bytes[17] = 0xFF;
             bytes[18] = 0xFF;
-            // Diagnostics is byte 19 in v4.
+            // Diagnostics is byte 19 in v5.
             bytes[19] = b17;
             // Power fields (bytes 20–27) are raw u16 with no scaling: every value —
             // including the u16::MAX sentinel — round-trips bit-exact.
             bytes[20..28].copy_from_slice(&power);
+            // Uptime (bytes 28–31): raw u32, no sentinel, all values round-trip exact.
+            bytes[28..32].copy_from_slice(&uptime);
+            // Location fields (bytes 32–37): force to i16::MIN sentinel so they
+            // decode to None and encode back to i16::MIN — bit-exact.
+            let loc_sentinel = i16::MIN.to_le_bytes();
+            bytes[32] = loc_sentinel[0];
+            bytes[33] = loc_sentinel[1];
+            bytes[34] = loc_sentinel[0];
+            bytes[35] = loc_sentinel[1];
+            bytes[36] = loc_sentinel[0];
+            bytes[37] = loc_sentinel[1];
 
-            let decoded = Telemetry::decode(&bytes).expect("valid v4 frame must decode");
+            let decoded = Telemetry::decode(&bytes).expect("valid v5 frame must decode");
             let re_encoded = decoded.encode();
             prop_assert_eq!(bytes, re_encoded);
         }
 
         #[test]
-        #[expect(clippy::expect_used, reason = "proptest: encode always produces a valid v2 frame")]
+        #[expect(clippy::expect_used, reason = "proptest: encode always produces a valid v5 frame")]
         fn lux_roundtrip_preserves_value_within_tolerance(
             lux in 0.0_f32..=120_000.0_f32,
         ) {
@@ -1129,6 +1287,42 @@ mod tests {
             prop_assert!(
                 (recovered - lux).abs() <= tolerance,
                 "lux={lux}, recovered={recovered}, tolerance={tolerance}"
+            );
+        }
+
+        #[test]
+        #[expect(clippy::expect_used, reason = "proptest: location values round-trip within coarse LSB")]
+        fn location_roundtrip_within_tolerance(
+            lat in -90.0_f32..=90.0_f32,
+            lon in -180.0_f32..=180.0_f32,
+            alt in -1000.0_f32..=9000.0_f32,
+        ) {
+            let telem = Telemetry {
+                latitude_deg: Some(lat),
+                longitude_deg: Some(lon),
+                altitude_m: Some(alt),
+                ..Telemetry::empty()
+            };
+            let frame = telem.encode();
+            let decoded = Telemetry::decode(&frame).expect("encode always produces a valid frame");
+
+            let recovered_lat = decoded.latitude_deg.expect("latitude should be Some after roundtrip");
+            let recovered_lon = decoded.longitude_deg.expect("longitude should be Some after roundtrip");
+            let recovered_alt = decoded.altitude_m.expect("altitude should be Some after roundtrip");
+
+            // Lat/lon: coarse 0.01° LSB
+            prop_assert!(
+                (recovered_lat - lat).abs() <= 0.01,
+                "lat={lat}, recovered={recovered_lat}"
+            );
+            prop_assert!(
+                (recovered_lon - lon).abs() <= 0.01,
+                "lon={lon}, recovered={recovered_lon}"
+            );
+            // Altitude: coarse 1 m LSB
+            prop_assert!(
+                (recovered_alt - alt).abs() <= 1.0,
+                "alt={alt}, recovered={recovered_alt}"
             );
         }
     }
