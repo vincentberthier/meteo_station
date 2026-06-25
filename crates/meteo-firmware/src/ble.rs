@@ -1,9 +1,14 @@
-//! BLE peripheral stack — advertising + GATT telemetry service.
+//! BLE peripheral stack — extended connectable broadcast + reserved config service.
 //!
-//! Brings up the on-chip ESP32-H2 BLE radio via esp-radio and trouble-host,
-//! advertises as `MeteoStation` (connectable, undirected), exposes a custom
-//! 128-bit GATT service with one Notify characteristic, pushes sensor telemetry
-//! at 1 Hz, and re-advertises immediately after every disconnect.
+//! Brings up the on-chip ESP32-H2 BLE radio via esp-radio and trouble-host.
+//! Advertises as `MeteoStation` with an extended connectable undirected
+//! advertisement carrying the 38-byte v5 telemetry frame as
+//! Manufacturer-Specific Data (company 0xFFFF), refreshed at 1 Hz.
+//!
+//! A reserved config service exposes a PIN-gated writable location
+//! characteristic; on a successful write the validated Location is signalled
+//! to the config task (see `crate::config`), which flushes it to NVS and
+//! republishes it.  No flash I/O happens in this task.
 //!
 //! The `derive` feature of trouble-host 0.6 requires `trouble-host-macros 0.4`
 //! which is not available in the crates.io registry used by this workspace.
@@ -25,19 +30,20 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use defmt::{info, warn};
 use embassy_futures::join::join;
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Ticker};
 use esp_radio::ble::controller::BleConnector;
 use meteo_lib::Telemetry;
 use trouble_host::advertise::{
-    AdStructure, Advertisement, AdvertisementParameters, BR_EDR_NOT_SUPPORTED,
+    AdStructure, Advertisement, AdvertisementParameters, AdvertisementSet, BR_EDR_NOT_SUPPORTED,
     LE_GENERAL_DISCOVERABLE,
 };
+use trouble_host::att::AttErrorCode;
 use trouble_host::attribute::{AttributeTable, Characteristic, CharacteristicProp, Service};
-use trouble_host::connection::RequestedConnParams;
-use trouble_host::gatt::GattConnectionEvent;
+use trouble_host::connection::{Connection, RequestedConnParams};
+use trouble_host::gatt::{GattConnectionEvent, GattEvent};
 use trouble_host::prelude::{
     AttributeServer, DefaultPacketPool, ExternalController, GapConfig, Host, HostResources,
     PeripheralConfig, Runner, Uuid, appearance,
@@ -57,63 +63,44 @@ const STATION_NAME: &str = "MeteoStation";
 const CONNECTIONS_MAX: usize = 1;
 const L2CAP_CHANNELS_MAX: usize = 2;
 
-/// How often the idle advertise loop re-arms while waiting for a central. Each
-/// re-arm bumps `ADV_BEAT`, the BLE-liveness signal the RWDT supervisor watches.
-/// Re-arming tears down and restarts advertising, which races a central's
-/// connection attempt, so this is kept as long as the 8 s RWDT timeout allows: at
-/// 4 s, `ADV_BEAT` advances at least once per ~4 s — comfortably inside the 8 s
-/// window — while minimizing the advertising churn that hurts connectability.
-const ADV_REFRESH: Duration = Duration::from_secs(4);
-
 // ---------------------------------------------------------------------------
 // Attribute table sizing
 //
-// GAP_SERVICE_ATTRIBUTE_COUNT = 6  (device-name decl+value, appearance decl+value,
-//                                   GAP service handle, GATT service handle)
-// MeteoService:
+// GAP_SERVICE_ATTRIBUTE_COUNT = 6  (gap-service, device-name decl+value,
+//                                   appearance decl+value, gatt-service)
+// Reserved config service:
 //   1  primary-service attribute
-//   2  telemetry characteristic (declaration + value)
-//   1  CCCD descriptor          (for Notify)
-// DIS (Device Information Service):
-//   1  primary-service attribute
-//   2  firmware-revision characteristic (declaration + value)
-// ───────────────────────────────────
-// 13  total
+//   1  location characteristic declaration
+//   1  location characteristic value
+// ─────────────────────────────────────
+//  9  total
 //
-// CCCD_MAX: one CCCD slot per notifiable characteristic per connection = 1.
-// CONN_MAX: matches CONNECTIONS_MAX = 1.
+// CCCD_MAX: no Notify/Indicate characteristics — keep 1 slot for mandatory
+//           GATT bookkeeping.
 // ---------------------------------------------------------------------------
-const ATT_MAX: usize = 13;
+const ATT_MAX: usize = 9;
 const CCCD_MAX: usize = 1;
 
-/// Standard Device Information Service (0x180A) and Firmware Revision String
-/// (0x2A26), expanded against the Bluetooth base UUID by `Uuid::new_short`.
-const DIS_UUID: Uuid = Uuid::new_short(0x180A);
-const FW_REV_UUID: Uuid = Uuid::new_short(0x2A26);
-
-/// Firmware version string surfaced over DIS. Sourced from the crate version
-/// (workspace 0.1.0). The DIS Firmware Revision String is a UTF-8 string with
-/// no NUL terminator; `add_characteristic_ro` stores the `&'static str` bytes
-/// directly (see step 3), so no length const or backing buffer is needed.
-const FW_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// Telemetry service UUID: 7e700001-b1df-42a1-bb5f-6a1028c793b0
+/// Reserved config service UUID: 7e700010-b1df-42a1-bb5f-6a1028c793b0
 ///
-/// BLE transmits 128-bit UUIDs LSB-first; the bytes below are the UUID octets
-/// in wire (little-endian) order.
-const SERVICE_UUID: Uuid = Uuid::new_long([
-    0xb0, 0x93, 0xc7, 0x28, 0x10, 0x6a, 0x5f, 0xbb, 0xa1, 0x42, 0xdf, 0xb1, 0x01, 0x00, 0x70, 0x7e,
+/// BLE transmits 128-bit UUIDs LSB-first; bytes below are in wire order.
+const RESERVED_SERVICE_UUID: Uuid = Uuid::new_long([
+    0xb0, 0x93, 0xc7, 0x28, 0x10, 0x6a, 0x5f, 0xbb, 0xa1, 0x42, 0xdf, 0xb1, 0x10, 0x00, 0x70, 0x7e,
 ]);
 
-/// Telemetry characteristic UUID: 7e700002-b1df-42a1-bb5f-6a1028c793b0
-const TELEMETRY_UUID: Uuid = Uuid::new_long([
-    0xb0, 0x93, 0xc7, 0x28, 0x10, 0x6a, 0x5f, 0xbb, 0xa1, 0x42, 0xdf, 0xb1, 0x02, 0x00, 0x70, 0x7e,
+/// Location characteristic UUID: 7e700011-b1df-42a1-bb5f-6a1028c793b0
+const LOCATION_UUID: Uuid = Uuid::new_long([
+    0xb0, 0x93, 0xc7, 0x28, 0x10, 0x6a, 0x5f, 0xbb, 0xa1, 0x42, 0xdf, 0xb1, 0x11, 0x00, 0x70, 0x7e,
 ]);
 
-/// Service UUID bytes used in the 128-bit Service UUIDs AD structure.
-const SERVICE_UUID_LE: [u8; 16] = [
-    0xb0, 0x93, 0xc7, 0x28, 0x10, 0x6a, 0x5f, 0xbb, 0xa1, 0x42, 0xdf, 0xb1, 0x01, 0x00, 0x70, 0x7e,
-];
+/// Manufacturer-specific data company identifier (0xFFFF = test / unregistered).
+const COMPANY_ID: u16 = 0xFFFF;
+
+/// Compile-time PIN gating the location write.
+/// Written as "000911" by the app (leading zeros are UI convention); only the
+/// numeric value `911` matters here. App-level gate — not a cryptographic
+/// secret; travels in cleartext (no BLE pairing configured).
+const CONFIG_PIN: u32 = 911;
 
 /// `RawMutex` type used for the GATT attribute table.
 ///
@@ -126,11 +113,11 @@ type TableMutex = esp_sync::RawMutex;
 pub type Controller = ExternalController<BleConnector<'static>, 20>;
 
 /// Bumped every advertise-loop iteration; proves the GAP loop is cycling even
-/// with no central connected (read by the RWDT supervisor in substep 5).
+/// with no central connected (read by the RWDT supervisor in `watchdog.rs`).
 pub static ADV_BEAT: AtomicU32 = AtomicU32::new(0);
 
-/// Latest-wins signal: the BMP388 task publishes here after each reading; the
-/// notify loop drains it and pushes the encoded frame to every connected central.
+/// Latest-wins signal: sensor tasks publish here after each reading; the
+/// broadcast loop encodes the value into the manufacturer-data advertisement.
 ///
 /// `Signal` is latest-wins: a second `signal()` before `wait()` is consumed
 /// replaces the first value — the desired behaviour for a 1 Hz sensor feed.
@@ -142,7 +129,7 @@ type MeteoServer<'stack> =
 
 /// Entry point for the BLE task.
 pub async fn run(controller: Controller) {
-    let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
+    let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1> =
         HostResources::new();
 
     let stack: Stack<'_, Controller, DefaultPacketPool> =
@@ -155,14 +142,10 @@ pub async fn run(controller: Controller) {
         ..
     } = stack.build();
 
-    // Storage buffer for the telemetry value (FRAME_LEN = 28 bytes in v4); lives for
-    // the duration of `run`. A 28-byte notify needs ATT MTU ≥ 31; the DefaultPacketPool
-    // MTU (251) makes the host's default ATT MTU 247, and a central (e.g. BlueZ)
-    // negotiates that via ATT ExchangeMtu before it subscribes to CCCD notifications,
-    // so every delivered notify carries the full 28-byte frame.
-    let mut telemetry_storage = [0_u8; meteo_lib::FRAME_LEN];
+    // Storage buffer for the location characteristic value (AUTH_WRITE_LEN = 10 bytes).
+    let mut location_storage = [0_u8; meteo_lib::ble::location::AUTH_WRITE_LEN];
 
-    // Build the attribute table (GAP + GATT mandatory services + MeteoService).
+    // Build the attribute table (GAP + GATT mandatory services + reserved config service).
     let mut table: AttributeTable<'_, TableMutex, ATT_MAX> = AttributeTable::new();
 
     // GAP + GATT mandatory services (device name + appearance).
@@ -173,38 +156,27 @@ pub async fn run(controller: Controller) {
     .build(&mut table)
     .expect("GAP config");
 
-    // Custom telemetry service with one Notify+Read characteristic.
-    let telemetry_char: Characteristic<[u8; meteo_lib::FRAME_LEN]> = {
-        let mut svc = table.add_service(Service::new(SERVICE_UUID));
+    // Reserved config service with one Read+Write location characteristic.
+    let location_char: Characteristic<[u8; meteo_lib::ble::location::AUTH_WRITE_LEN]> = {
+        let mut svc = table.add_service(Service::new(RESERVED_SERVICE_UUID));
         let ch = svc
             .add_characteristic(
-                TELEMETRY_UUID,
-                [CharacteristicProp::Read, CharacteristicProp::Notify],
-                [0_u8; meteo_lib::FRAME_LEN],
-                &mut telemetry_storage,
+                LOCATION_UUID,
+                [CharacteristicProp::Read, CharacteristicProp::Write],
+                [0_u8; meteo_lib::ble::location::AUTH_WRITE_LEN],
+                &mut location_storage,
             )
             .build();
         svc.build();
         ch
     };
 
-    // Device Information Service: a single read-only Firmware Revision String the
-    // central reads once on connect to show the device firmware version. The value
-    // is the 'static FW_VERSION str, stored as ReadOnlyData — no backing buffer.
-    {
-        let mut dis = table.add_service(Service::new(DIS_UUID));
-        // The CharacteristicBuilder is dropped at the `;`, releasing its mutable
-        // borrow on `dis`, so the following `dis.build()` compiles.
-        dis.add_characteristic_ro(FW_REV_UUID, FW_VERSION).build();
-        dis.build();
-    }
-
     // Wrap the table in an AttributeServer.
     let server: MeteoServer<'_> = AttributeServer::new(table);
 
     join(
         ble_runner(runner),
-        advertise_loop(&stack, &mut peripheral, &server, &telemetry_char),
+        advertise_loop(&stack, &mut peripheral, &server, &location_char),
     )
     .await;
 }
@@ -214,110 +186,171 @@ async fn ble_runner(mut runner: Runner<'_, Controller, DefaultPacketPool>) {
     result.expect("BLE runner exited");
 }
 
+/// Encodes a v5 advertisement payload into `buf` and returns the byte count written.
+///
+/// Layout: Flags (3 B) + `CompleteLocalName` "`MeteoStation`" (14 B) +
+/// `ManufacturerSpecificData` 0xFFFF + 38-byte frame (42 B) = 59 B total.
+/// `buf` must be at least 64 bytes.
+fn encode_adv(buf: &mut [u8], frame: &[u8; meteo_lib::FRAME_LEN]) -> usize {
+    AdStructure::encode_slice(
+        &[
+            AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
+            AdStructure::CompleteLocalName(STATION_NAME.as_bytes()),
+            AdStructure::ManufacturerSpecificData {
+                company_identifier: COMPANY_ID,
+                payload: frame,
+            },
+        ],
+        buf,
+    )
+    .expect("adv encode (64 B fits Flags+name+38-byte frame)")
+}
+
 async fn advertise_loop(
     stack: &Stack<'_, Controller, DefaultPacketPool>,
     peripheral: &mut trouble_host::peripheral::Peripheral<'_, Controller, DefaultPacketPool>,
     server: &MeteoServer<'_>,
-    telemetry_char: &Characteristic<[u8; meteo_lib::FRAME_LEN]>,
+    location_char: &Characteristic<[u8; meteo_lib::ble::location::AUTH_WRITE_LEN]>,
 ) {
-    // Build the advertisement + scan-response data once. The 31-byte legacy AD
-    // limit cannot hold Flags + the full local name + a 128-bit service UUID
-    // (3 + 14 + 18 = 35 bytes), so the UUID goes in the scan response: the
-    // advertisement carries Flags + Complete Local Name (17 bytes), and a central
-    // that scans gets the 128-bit service UUID (18 bytes) in the scan response.
-    let mut adv_buf = [0_u8; 31];
-    let adv_len = AdStructure::encode_slice(
-        &[
-            AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
-            AdStructure::CompleteLocalName(STATION_NAME.as_bytes()),
-        ],
-        &mut adv_buf,
-    )
-    .expect("adv encode");
-
-    let mut scan_buf = [0_u8; 31];
-    let scan_len = AdStructure::encode_slice(
-        &[AdStructure::ServiceUuids128(&[SERVICE_UUID_LE])],
-        &mut scan_buf,
-    )
-    .expect("scan-response encode");
-
-    let params = AdvertisementParameters::default();
+    // 64 bytes is sufficient: Flags(3) + CompleteLocalName(14) + MfgData(4+38=42) = 59.
+    let mut adv_buf = [0_u8; 64];
 
     loop {
-        ADV_BEAT.fetch_add(1, Ordering::Relaxed);
-        info!(
-            "BLE: starting advertisement (beat={})",
-            ADV_BEAT.load(Ordering::Relaxed)
-        );
+        // Encode the current telemetry into the advertisement buffer.
+        let frame = TELEMETRY
+            .try_take()
+            .unwrap_or_else(Telemetry::empty)
+            .encode();
+        let adv_len = encode_adv(&mut adv_buf, &frame);
 
+        // Initialise handles from a temporary sets array; the temporary is dropped
+        // at the end of this statement, releasing the immutable borrow on adv_buf.
+        let mut handles = AdvertisementSet::handles(&[AdvertisementSet {
+            params: AdvertisementParameters::default(),
+            data: Advertisement::ExtConnectableNonscannableUndirected {
+                adv_data: &adv_buf[..adv_len],
+            },
+        }]);
+
+        // Start extended connectable advertising. A second temporary sets array is
+        // passed here; it is also dropped when advertise_ext returns, freeing adv_buf
+        // for the update loop below.
         let Ok(advertiser) = peripheral
-            .advertise(
-                &params,
-                Advertisement::ConnectableScannableUndirected {
-                    adv_data: &adv_buf[..adv_len],
-                    scan_data: &scan_buf[..scan_len],
-                },
+            .advertise_ext(
+                &[AdvertisementSet {
+                    params: AdvertisementParameters::default(),
+                    data: Advertisement::ExtConnectableNonscannableUndirected {
+                        adv_data: &adv_buf[..adv_len],
+                    },
+                }],
+                &mut handles,
             )
             .await
         else {
-            warn!("BLE: advertise() failed, retrying");
+            warn!("BLE: advertise_ext() failed, retrying");
             continue;
         };
 
-        // Wait for a central to connect, but bound the wait: if none arrives within
-        // ADV_REFRESH, drop the advertiser (its Drop stops advertising) and loop to
-        // re-advertise. This keeps ADV_BEAT advancing while idle (no central), which
-        // is the BLE liveness signal the RWDT supervisor watches — without it, an
-        // idle-but-healthy device parks forever in accept(), ADV_BEAT freezes, and
-        // the watchdog false-resets the chip.
-        let raw_conn = match select(advertiser.accept(), Timer::after(ADV_REFRESH)).await {
-            Either::First(Ok(c)) => c,
-            Either::First(Err(_)) => {
-                warn!("BLE: accept() failed, re-advertising");
-                continue;
+        ADV_BEAT.fetch_add(1, Ordering::Relaxed);
+        crate::watchdog::BLE_BEAT.fetch_add(1, Ordering::Relaxed);
+        info!(
+            "BLE: broadcasting (beat={})",
+            ADV_BEAT.load(Ordering::Relaxed)
+        );
+
+        // Wait for a central to connect, refreshing the manufacturer-data payload
+        // at 1 Hz from TELEMETRY. Each refresh bumps ADV_BEAT and BLE_BEAT so the
+        // RWDT supervisor sees the BLE stack is alive even with no central.
+        let raw_conn = loop {
+            // `wait()` yields until a new telemetry frame arrives (~1 Hz).
+            let telem = TELEMETRY.wait().await;
+            let upd_frame = telem.encode();
+            let upd_len = encode_adv(&mut adv_buf, &upd_frame);
+
+            let update_sets = [AdvertisementSet {
+                params: AdvertisementParameters::default(),
+                data: Advertisement::ExtConnectableNonscannableUndirected {
+                    adv_data: &adv_buf[..upd_len],
+                },
+            }];
+            if let Err(e) = peripheral
+                .update_adv_data_ext(&update_sets, &mut handles)
+                .await
+            {
+                warn!(
+                    "BLE: update_adv_data_ext failed: {:?}",
+                    defmt::Debug2Format(&e)
+                );
             }
-            Either::Second(()) => continue, // no central within ADV_REFRESH: re-advertise
+
+            ADV_BEAT.fetch_add(1, Ordering::Relaxed);
+            crate::watchdog::BLE_BEAT.fetch_add(1, Ordering::Relaxed);
+
+            if let Some(conn) = peripheral.try_accept() {
+                break conn;
+            }
+            // update_sets dropped here; adv_buf immutable borrow released.
         };
 
-        // Centrals (e.g. BlueZ) often connect with a ~420 ms supervision timeout,
-        // which drops the link on any brief radio stall ("Connection Timeout").
-        // As a peripheral, request a robust supervision timeout (8 s) + relaxed
-        // 80 ms interval — ample for 1 Hz telemetry. On the ESP32-H2 this request
-        // only takes effect because the workspace vendors trouble-host with a patch
-        // that routes a peripheral's request over L2CAP signaling (the controller's
-        // HCI LE Connection Update path accepts the command but never runs the
-        // procedure on air); see the [patch.crates-io] note in the workspace
-        // Cargo.toml. Best-effort: if the central rejects, the link keeps the
-        // central's params. The applied values surface in the ConnectionParamsUpdated
-        // log below (supervision_ms=8000 on success).
-        if let Err(e) = raw_conn
-            .update_connection_params(stack, &RequestedConnParams::default())
-            .await
-        {
-            warn!(
-                "BLE: connection-params update request failed: {:?}",
-                defmt::Debug2Format(&e)
-            );
-        }
+        // Drop the advertiser to stop extended advertising before handing off to
+        // the connection handler.
+        drop(advertiser);
 
-        // Attach the GATT attribute server to this connection.
-        let Ok(conn) = raw_conn.with_attribute_server(server) else {
-            warn!("BLE: with_attribute_server() failed, re-advertising");
-            continue;
-        };
+        serve_connection(stack, server, location_char, raw_conn).await;
+        info!("BLE: resuming broadcast");
+    }
+}
 
-        info!("BLE: central connected");
+/// Serves a single connected central: negotiates connection parameters,
+/// handles GATT writes on the location characteristic, and bumps `BLE_BEAT`
+/// at 1 Hz so the RWDT supervisor sees a live BLE stack during a connection.
+async fn serve_connection(
+    stack: &Stack<'_, Controller, DefaultPacketPool>,
+    server: &MeteoServer<'_>,
+    location_char: &Characteristic<[u8; meteo_lib::ble::location::AUTH_WRITE_LEN]>,
+    raw_conn: Connection<'_, DefaultPacketPool>,
+) {
+    // Request a robust 8 s supervision timeout (vs the BlueZ default ~420 ms)
+    // and a relaxed 80 ms connection interval. This only takes effect due to the
+    // vendored trouble-host patch that routes peripheral parameter updates over
+    // L2CAP signalling. Best-effort: if the central rejects, the link keeps its
+    // own parameters.
+    if let Err(e) = raw_conn
+        .update_connection_params(stack, &RequestedConnParams::default())
+        .await
+    {
+        warn!(
+            "BLE: connection-params update request failed: {:?}",
+            defmt::Debug2Format(&e)
+        );
+    }
 
-        // Drive GATT events and telemetry notifications concurrently until disconnect.
-        select(gatt_events(&conn), notify_loop(&conn, telemetry_char)).await;
+    let Ok(conn) = raw_conn.with_attribute_server(server) else {
+        warn!("BLE: with_attribute_server() failed");
+        return;
+    };
 
-        info!("BLE: disconnected, re-advertising");
+    info!("BLE: central connected (config channel)");
+
+    // Drive GATT events and a 1 Hz heartbeat concurrently until disconnect.
+    select(gatt_events(&conn, location_char), connection_heartbeat()).await;
+}
+
+/// Bumps `BLE_BEAT` at 1 Hz so the RWDT supervisor sees a live BLE stack
+/// while a central is connected.  Never returns.
+async fn connection_heartbeat() -> ! {
+    let mut tick = Ticker::every(Duration::from_secs(1));
+    loop {
+        tick.next().await;
+        crate::watchdog::BLE_BEAT.fetch_add(1, Ordering::Relaxed);
     }
 }
 
 /// Polls GATT connection events, returning when the connection is disconnected.
-async fn gatt_events(conn: &trouble_host::gatt::GattConnection<'_, '_, DefaultPacketPool>) {
+async fn gatt_events(
+    conn: &trouble_host::gatt::GattConnection<'_, '_, DefaultPacketPool>,
+    location_char: &Characteristic<[u8; meteo_lib::ble::location::AUTH_WRITE_LEN]>,
+) {
     loop {
         match conn.next().await {
             GattConnectionEvent::Disconnected { reason } => {
@@ -327,49 +360,57 @@ async fn gatt_events(conn: &trouble_host::gatt::GattConnection<'_, '_, DefaultPa
                 );
                 break;
             }
-            // Log the negotiated link parameters — the supervision timeout is the
-            // knob that governs link stability (a central connecting with a short
-            // ~420 ms timeout drops on any brief RF stall; see scripts/ble_soak.sh
-            // and CLAUDE.md). Useful operational signal; keep it.
             GattConnectionEvent::ConnectionParamsUpdated {
                 conn_interval,
                 peripheral_latency,
                 supervision_timeout,
             } => {
                 info!(
-                    "BLE: conn params updated: interval_us={=u64} latency={=u16} supervision_ms={=u64}",
+                    "BLE: conn params: interval_us={=u64} latency={=u16} supervision_ms={=u64}",
                     conn_interval.as_micros(),
                     peripheral_latency,
                     supervision_timeout.as_millis()
                 );
             }
-            // PhyUpdated / DataLengthUpdated / RequestConnectionParams / Gatt: the
-            // attribute server handles GATT requests; nothing else to do here.
+            GattConnectionEvent::Gatt { event } => match event {
+                GattEvent::Write(write) if write.handle() == location_char.handle => {
+                    match meteo_lib::parse_authorized_write(write.data(), CONFIG_PIN) {
+                        Ok(loc) => {
+                            crate::config::LOCATION_WRITE.signal(loc);
+                            info!("BLE: location write accepted");
+                            if let Ok(reply) = write.accept() {
+                                reply.send().await;
+                            }
+                        }
+                        Err(e) => {
+                            warn!("BLE: rejected location write: {:?}", e);
+                            let code = match e {
+                                meteo_lib::LocationWriteError::BadPin => {
+                                    AttErrorCode::INSUFFICIENT_AUTHORISATION
+                                }
+                                meteo_lib::LocationWriteError::WrongLength(_)
+                                | meteo_lib::LocationWriteError::Location(_) => {
+                                    AttErrorCode::OUT_OF_RANGE
+                                }
+                            };
+                            if let Ok(reply) = write.reject(code) {
+                                reply.send().await;
+                            }
+                        }
+                    }
+                }
+                other @ (GattEvent::Read(_)
+                | GattEvent::Write(_)
+                | GattEvent::Other(_)
+                | GattEvent::NotAllowed(_)) => {
+                    if let Ok(reply) = other.accept() {
+                        reply.send().await;
+                    }
+                }
+            },
             GattConnectionEvent::PhyUpdated { .. }
             | GattConnectionEvent::RequestConnectionParams(_)
-            | GattConnectionEvent::DataLengthUpdated { .. }
-            | GattConnectionEvent::Gatt { .. } => {}
+            | GattConnectionEvent::DataLengthUpdated { .. } => {}
         }
-    }
-}
-
-/// Waits for new telemetry from the `TELEMETRY` signal and notifies the central.
-///
-/// Returns when `notify()` returns an error (connection lost).
-/// Heartbeat bumps (substep 5) are deliberately omitted here.
-async fn notify_loop(
-    conn: &trouble_host::gatt::GattConnection<'_, '_, DefaultPacketPool>,
-    telemetry_char: &Characteristic<[u8; meteo_lib::FRAME_LEN]>,
-) {
-    loop {
-        // Latest-wins: no backlog accumulates between 1 Hz samples.
-        let telem = TELEMETRY.wait().await;
-        let frame = telem.encode();
-
-        // notify() is a no-op if the central has not enabled CCCD notifications.
-        if telemetry_char.notify(conn, &frame).await.is_err() {
-            break;
-        }
-        crate::watchdog::BLE_BEAT.fetch_add(1, Ordering::Relaxed);
     }
 }
