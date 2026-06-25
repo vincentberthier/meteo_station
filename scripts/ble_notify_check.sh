@@ -5,7 +5,7 @@
 #   Connects to the on-chip ESP32-H2 BLE peripheral (MeteoStation), subscribes to
 #   the telemetry characteristic, captures notifications for WINDOW_SECS, and
 #   asserts at least MIN_FRAMES well-formed frames arrived (each FRAME_LEN bytes
-#   with byte[0] == 0x03, the frame-version sentinel). Exits 0 on PASS, non-zero
+#   with byte[0] == FRAME_VERSION, the frame-version sentinel). Exits 0 on PASS, non-zero
 #   on FAIL.
 #
 # Why BlueZ AcquireNotify (not bluetoothctl "notify on" output parsing):
@@ -25,7 +25,8 @@
 #   CONNECT_TIMEOUT  — per-step deadline in seconds           (30)
 #   WINDOW_SECS      — notification capture window in seconds (15)
 #   MIN_FRAMES       — minimum notifications required to PASS (5)
-#   FRAME_LEN        — expected payload length in bytes       (20)
+#   FRAME_LEN        — expected payload length in bytes       (28)
+#   FRAME_VERSION    — expected byte[0] frame-version tag      (4)
 #
 # Requires on gaia:
 #   bluetoothctl, busctl, python3 with the `dbus` bindings (python-dbus), date
@@ -54,9 +55,10 @@ CHAR_UUID="${CHAR_UUID:-7e700002-b1df-42a1-bb5f-6a1028c793b0}"
 CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-30}"
 WINDOW_SECS="${WINDOW_SECS:-15}"
 MIN_FRAMES="${MIN_FRAMES:-5}"
-FRAME_LEN="${FRAME_LEN:-20}"
+FRAME_LEN="${FRAME_LEN:-28}"
+FRAME_VERSION="${FRAME_VERSION:-4}"
 
-export DEVICE ADAPTER CHAR_UUID WINDOW_SECS MIN_FRAMES FRAME_LEN
+export DEVICE ADAPTER CHAR_UUID WINDOW_SECS MIN_FRAMES FRAME_LEN FRAME_VERSION
 
 DBUS_PATH="/org/bluez/${ADAPTER}/dev_${DEVICE//:/_}"
 
@@ -159,6 +161,7 @@ char_uuid  = os.environ["CHAR_UUID"].lower()
 window     = float(os.environ["WINDOW_SECS"])
 min_frames = int(os.environ["MIN_FRAMES"])
 frame_len  = int(os.environ["FRAME_LEN"])
+frame_version = int(os.environ["FRAME_VERSION"])
 
 bus = dbus.SystemBus()
 dev_path = "/org/bluez/%s/dev_%s" % (adapter, dev_addr.replace(":", "_"))
@@ -207,7 +210,7 @@ while time.time() < end:
     if not poller.poll(remaining_ms):
         continue
     data = os.read(fd, mtu)
-    if len(data) == frame_len and data[0] == 0x03:
+    if len(data) == frame_len and data[0] == frame_version:
         good += 1
     elif data:
         bad += 1
@@ -227,7 +230,7 @@ cleanup
 
 case "$rc" in
     0) log "PASS: telemetry notifications flow correctly"; exit 0 ;;
-    2) fail "malformed frame(s) received — wrong length or byte[0] != 0x03" ;;
+    2) fail "malformed frame(s) received — wrong length or byte[0] != 0x04" ;;
     3) fail "too few valid frames in ${WINDOW_SECS}s; need ${MIN_FRAMES}" ;;
     *) fail "notify reader error (GATT not ready / characteristic missing)" ;;
 esac

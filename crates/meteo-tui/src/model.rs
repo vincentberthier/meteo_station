@@ -159,6 +159,61 @@ pub fn fmt_battery(v: Option<u8>) -> String {
     v.map_or_else(|| "N/A".to_owned(), |b| format!("{b} %"))
 }
 
+/// Format the solar-panel reading: voltage, current (mA), and derived power.
+///
+/// `"N/A"` when voltage is missing; otherwise `"{V:.2} V, {mA} mA ({W:.2} W)"`,
+/// dropping the current/power tail when current is missing.
+#[must_use]
+pub fn fmt_solar(mv: Option<u16>, ma: Option<u16>) -> String {
+    mv.map_or_else(
+        || "N/A".to_owned(),
+        |raw_mv| {
+            let v = f64::from(raw_mv) / 1000.0;
+            ma.map_or_else(
+                || format!("{v:.2} V"),
+                |raw_ma| {
+                    let w = v * (f64::from(raw_ma) / 1000.0);
+                    format!("{v:.2} V, {raw_ma} mA ({w:.2} W)")
+                },
+            )
+        },
+    )
+}
+
+/// Format the battery status: voltage and derived charge percentage.
+///
+/// `"N/A"` when both are missing; otherwise `"{V:.2} V, {pct} %"`, dropping
+/// whichever half is missing.
+#[must_use]
+pub fn fmt_battery_status(mv: Option<u16>, pct: Option<u8>) -> String {
+    match (mv, pct) {
+        (None, None) => "N/A".to_owned(),
+        (Some(raw_mv), Some(p)) => format!("{:.2} V, {p} %", f64::from(raw_mv) / 1000.0),
+        (Some(raw_mv), None) => format!("{:.2} V", f64::from(raw_mv) / 1000.0),
+        (None, Some(p)) => format!("{p} %"),
+    }
+}
+
+/// Format the load reading: current (mA), plus power derived from the battery voltage.
+///
+/// `"N/A"` when current is missing; otherwise `"{mA} mA ({W:.2} W)"`, dropping
+/// the power term when the battery voltage is unavailable.
+#[must_use]
+pub fn fmt_load(batt_mv: Option<u16>, ma: Option<u16>) -> String {
+    ma.map_or_else(
+        || "N/A".to_owned(),
+        |raw_ma| {
+            batt_mv.map_or_else(
+                || format!("{raw_ma} mA"),
+                |mv| {
+                    let w = (f64::from(mv) / 1000.0) * (f64::from(raw_ma) / 1000.0);
+                    format!("{raw_ma} mA ({w:.2} W)")
+                },
+            )
+        },
+    )
+}
+
 /// Format the diagnostics bitfield as a human-readable status line.
 ///
 /// `"OK"` when no flags are set; otherwise a comma-joined list of active faults,
@@ -183,6 +238,12 @@ pub fn fmt_diagnostics(diag: Diagnostics) -> String {
     }
     if diag.mlx90614_fault() {
         flags.push("MLX90614 fault");
+    }
+    if diag.ina_pv_fault() {
+        flags.push("INA PV fault");
+    }
+    if diag.ina_batt_fault() {
+        flags.push("INA batt fault");
     }
     if flags.is_empty() {
         "OK".to_owned()
@@ -621,23 +682,75 @@ mod tests {
 
     #[test]
     fn fmt_diagnostics_all_flags_joined_in_bit_order() -> TestResult {
-        // Given — all six flags set
+        // Given — all eight flags set
         let diag = Diagnostics::empty()
             .with_occlusion(true)
             .with_baro_fault(true)
             .with_bme280_fault(true)
             .with_veml7700_fault(true)
             .with_baro_divergence(true)
-            .with_mlx90614_fault(true);
+            .with_mlx90614_fault(true)
+            .with_ina_pv_fault(true)
+            .with_ina_batt_fault(true);
 
         // When
         let result = fmt_diagnostics(diag);
 
-        // Then — labels appear in bit order (0→5)
+        // Then — labels appear in bit order (0→7)
         assert_eq!(
             result,
-            "sky occluded, BMP388 fault, BME280 fault, VEML7700 fault, baro divergence, MLX90614 fault"
+            "sky occluded, BMP388 fault, BME280 fault, VEML7700 fault, baro divergence, MLX90614 fault, INA PV fault, INA batt fault"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_diagnostics_ina_faults_individually() -> TestResult {
+        // Given / When / Then — bit 6 and bit 7 each render on their own
+        assert_eq!(
+            fmt_diagnostics(Diagnostics::empty().with_ina_pv_fault(true)),
+            "INA PV fault"
+        );
+        assert_eq!(
+            fmt_diagnostics(Diagnostics::empty().with_ina_batt_fault(true)),
+            "INA batt fault"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_solar_renders_voltage_current_power() -> TestResult {
+        // Given — 15.0 V, 600 mA → 9.0 W
+        let result = fmt_solar(Some(15_000), Some(600));
+
+        // Then
+        assert_eq!(result, "15.00 V, 600 mA (9.00 W)");
+
+        // Voltage only (no current): drops the current/power tail
+        assert_eq!(fmt_solar(Some(15_000), None), "15.00 V");
+        // No voltage: N/A
+        assert_eq!(fmt_solar(None, Some(600)), "N/A");
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_battery_status_renders_voltage_and_percent() -> TestResult {
+        // Given / When / Then
+        assert_eq!(fmt_battery_status(Some(3_900), Some(50)), "3.90 V, 50 %");
+        assert_eq!(fmt_battery_status(Some(3_900), None), "3.90 V");
+        assert_eq!(fmt_battery_status(None, Some(50)), "50 %");
+        assert_eq!(fmt_battery_status(None, None), "N/A");
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_load_renders_current_and_power() -> TestResult {
+        // Given — 120 mA at 3.9 V → 0.468 W
+        assert_eq!(fmt_load(Some(3_900), Some(120)), "120 mA (0.47 W)");
+        // No battery voltage: current only
+        assert_eq!(fmt_load(None, Some(120)), "120 mA");
+        // No current: N/A
+        assert_eq!(fmt_load(Some(3_900), None), "N/A");
         Ok(())
     }
 

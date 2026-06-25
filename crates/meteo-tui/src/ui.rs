@@ -24,7 +24,7 @@ use crate::model::{self, ConnState, Series};
 pub fn render(frame: &mut Frame, app: &mut AppState, now: Instant) {
     let [header, table_area, charts] = Layout::vertical([
         Constraint::Length(3),
-        Constraint::Length(11),
+        Constraint::Length(13),
         Constraint::Min(0),
     ])
     .areas(frame.area());
@@ -64,7 +64,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &AppState) {
     );
 }
 
-/// Render the telemetry table with nine rows (eight values + diagnostics).
+/// Render the telemetry table with eleven rows (ten values + diagnostics).
 ///
 /// Values are dimmed cosmetically when the last frame is older than
 /// [`STALE_AFTER`]. The diagnostics row is highlighted in red when any
@@ -79,7 +79,12 @@ fn render_table(frame: &mut Frame, area: Rect, app: &AppState, now: Instant) {
         ("Luminosity", model::fmt_lux(t.luminosity_lux)),
         ("Wind", model::fmt_wind(t.wind_speed_ms, t.wind_dir_deg)),
         ("Rain", model::fmt_rain(t.rain_rate_mm_h)),
-        ("Battery", model::fmt_battery(t.battery_pct)),
+        ("Solar", model::fmt_solar(t.solar_mv, t.solar_ma)),
+        (
+            "Battery",
+            model::fmt_battery_status(t.batt_mv, t.battery_pct),
+        ),
+        ("Load", model::fmt_load(t.batt_mv, t.load_ma)),
     ];
     let base = if app.is_stale(now, STALE_AFTER) {
         Style::new().add_modifier(Modifier::DIM)
@@ -122,10 +127,11 @@ struct ChartSpec {
     floor: Option<f64>,
 }
 
-/// Render the four time-series charts (air temperature, sky temperature,
-/// pressure, luminosity).
+/// Render the six time-series charts (air temperature, sky temperature,
+/// pressure, luminosity, wind speed, humidity).
 fn render_charts(frame: &mut Frame, area: Rect, app: &mut AppState) {
-    let [air, sky, pressure, lux] = Layout::vertical([Constraint::Ratio(1, 4); 4]).areas(area);
+    let [air, sky, pressure, lux, wind, humidity] =
+        Layout::vertical([Constraint::Ratio(1, 6); 6]).areas(area);
     render_series_chart(
         frame,
         air,
@@ -173,6 +179,30 @@ fn render_charts(frame: &mut Frame, area: Rect, app: &mut AppState) {
             floor: Some(0.0),
         },
         &mut app.lux,
+    );
+    render_series_chart(
+        frame,
+        wind,
+        &ChartSpec {
+            title: "Wind speed",
+            unit: "m/s",
+            prec: 1,
+            color: Color::LightGreen,
+            floor: Some(0.0),
+        },
+        &mut app.wind,
+    );
+    render_series_chart(
+        frame,
+        humidity,
+        &ChartSpec {
+            title: "Humidity",
+            unit: "%RH",
+            prec: 0,
+            color: Color::LightBlue,
+            floor: Some(0.0),
+        },
+        &mut app.humidity,
     );
 }
 
@@ -248,8 +278,9 @@ mod tests {
 
     #[test]
     fn render_smoke_fills_buffer_without_panic() -> TestResult {
-        // Given
-        let backend = ratatui::backend::TestBackend::new(120, 40);
+        // Given — tall enough that all six charts get room for their axis titles
+        // (header 3 + table 13 + six charts; ~7 rows/chart at 60 lines).
+        let backend = ratatui::backend::TestBackend::new(120, 60);
         let mut terminal = ratatui::Terminal::new(backend)?;
         let now = Instant::now();
         let mut app = AppState::new(now);

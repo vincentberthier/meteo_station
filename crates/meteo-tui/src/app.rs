@@ -40,6 +40,10 @@ pub struct AppState {
     pub pressure: Series,
     /// Rolling luminosity time series (seconds since session start, lux).
     pub lux: Series,
+    /// Rolling wind-speed time series (seconds since session start, m/s).
+    pub wind: Series,
+    /// Rolling relative-humidity time series (seconds since session start, %RH).
+    pub humidity: Series,
     /// Session start instant, used to compute relative timestamps.
     started: Instant,
 }
@@ -58,6 +62,8 @@ impl AppState {
             sky: Series::new(Series::DEFAULT_CAP),
             pressure: Series::new(Series::DEFAULT_CAP),
             lux: Series::new(Series::DEFAULT_CAP),
+            wind: Series::new(Series::DEFAULT_CAP),
+            humidity: Series::new(Series::DEFAULT_CAP),
             started: now,
         }
     }
@@ -77,6 +83,8 @@ impl AppState {
                 let sky_c = t.sky_temp_c;
                 let press_hpa = t.pressure_hpa;
                 let lux = t.luminosity_lux;
+                let wind_ms = t.wind_speed_ms;
+                let humidity = t.humidity_pct;
                 self.latest = t;
                 self.last_frame_at = Some(now);
                 let secs = now.duration_since(self.started).as_secs_f64();
@@ -91,6 +99,12 @@ impl AppState {
                 }
                 if let Some(v) = lux {
                     self.lux.push(secs, f64::from(v));
+                }
+                if let Some(v) = wind_ms {
+                    self.wind.push(secs, f64::from(v));
+                }
+                if let Some(v) = humidity {
+                    self.humidity.push(secs, f64::from(v));
                 }
             }
         }
@@ -135,6 +149,8 @@ mod tests {
             sky_temp_c: Some(-8.0),
             pressure_hpa: Some(1013.0),
             luminosity_lux: Some(1200.0),
+            wind_speed_ms: Some(3.5),
+            humidity_pct: Some(55.0),
             ..Telemetry::empty()
         };
 
@@ -148,6 +164,8 @@ mod tests {
         assert_eq!(app.sky.points().len(), 1);
         assert_eq!(app.pressure.points().len(), 1);
         assert_eq!(app.lux.points().len(), 1);
+        assert_eq!(app.wind.points().len(), 1);
+        assert_eq!(app.humidity.points().len(), 1);
 
         Ok(())
     }

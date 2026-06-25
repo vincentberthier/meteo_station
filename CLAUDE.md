@@ -8,6 +8,11 @@ Currently supports:
 - MLX90614 IR thermometer — sky temperature (via I2C0, address `0x5A`, shares GPIO10/11)
 - BME280 humidity/pressure/temperature sensor (via I2C0, address `0x76`, shares GPIO10/11)
 - VEML7700 ambient light sensor — luminosity in lux (via I2C0, address `0x10`, shares GPIO10/11)
+- Dual INA219 power monitors (via I2C0, shares GPIO10/11): U6 `0x40` on the PV feed
+  (panel voltage + harvest current), U7 `0x41` on the battery feed (battery voltage +
+  load current); battery percent derived on-device from a 1S-LiPo voltage curve
+- Weather meter (SparkFun SEN-15901): anemometer (GPIO22), rain gauge (GPIO12),
+  wind vane (GPIO1/ADC1)
 - Status LED on GPIO8
 
 > Ported from the STM32H753ZI (Nucleo-144). The on-chip BLE 5.3 radio replaces the
@@ -97,6 +102,8 @@ crates/
 │       ├── bme.rs         # BME280 task; 1 Hz humidity reads; graceful degradation,
 │       │                  #   no watchdog beat
 │       ├── veml.rs        # VEML7700 task; auto-ranging lux; no watchdog beat
+│       ├── ina.rs         # INA219 power task (spawned per rail: PV 0x40, batt 0x41);
+│       │                  #   bus V + current at 1 Hz; no watchdog beat
 │       ├── anemometer.rs  # Anemometer task; GPIO22 pulse count → wind speed; no beat
 │       ├── rain.rs        # Rain-gauge task; GPIO12 tip count → mm/h rate; no beat
 │       ├── vane.rs        # Wind-vane task; GPIO1/ADC1 divider → heading; no beat
@@ -111,16 +118,18 @@ crates/
 │   └── src/
 │       ├── lib.rs         # Re-exports sensor drivers and utilities
 │       ├── utils.rs       # Utility functions (trunc2, etc.)
+│       ├── battery.rs     # 1S-LiPo voltage→SoC curve (battery_pct_from_mv); host-tested
+│       ├── aggregate.rs   # SensorReading enum + Aggregator; sensor-data channel type
 │       ├── ble/
-│       │   └── frame.rs   # v3 wire frame: Telemetry, encode/decode, FrameError,
+│       │   └── frame.rs   # v4 wire frame (28 B): Telemetry, encode/decode, FrameError,
 │       │                  #   sentinels; host-tested; decode() targets Linux central
 │       └── sensors/
 │           ├── mod.rs     # Sensor module root
-│           ├── aggregate.rs # SensorReading enum; sensor-data channel type
 │           ├── bmp388.rs  # BMP388 pressure/temperature driver
 │           ├── mlx90614.rs  # MLX90614 IR thermometer driver (SMBus over I2C)
 │           ├── bme280.rs  # BME280 humidity/pressure/temp driver (float compensation)
 │           ├── veml7700.rs  # VEML7700 ambient light driver (auto-ranging lux)
+│           ├── ina219.rs  # INA219 current/bus-voltage driver (host-tested conversions)
 │           └── weather_meter.rs # SEN-15901 conversions: wind speed/dir, rain rate
 └── meteo-tui/             # Binary crate: terminal dashboard (host, x86_64-linux)
     └── src/
@@ -146,7 +155,7 @@ the target, `force-frame-pointers` (for esp-backtrace), and the espflash runner.
 `crates/meteo-tui` is a host-only (`x86_64-unknown-linux-gnu`) `std` binary crate. It
 connects to the `MeteoStation` BLE peripheral via **bluer 0.17** (the official Rust
 BlueZ binding), subscribes to the telemetry notify characteristic, decodes each
-20-byte v3 frame via `meteo-lib::ble::frame::decode`, and renders a live terminal
+28-byte v4 frame via `meteo-lib::ble::frame::decode`, and renders a live terminal
 dashboard with ratatui:
 
 - All frame fields (air temperature, pressure, humidity, sky/IR temperature,
@@ -236,7 +245,7 @@ firmware.
 
 The firmware brings up the on-chip BLE 5.3 radio via **esp-radio** and
 **trouble-host**, advertises as `MeteoStation` (connectable undirected, static
-random address `F0:CA:FE:00:00:01`), and pushes a 20-byte telemetry frame at 1 Hz
+random address `F0:CA:FE:00:00:01`), and pushes a 28-byte telemetry frame at 1 Hz
 over a GATT Notify characteristic.
 
 **GATT layout:**
@@ -247,11 +256,17 @@ over a GATT Notify characteristic.
 | Characteristic | `7e700002-b1df-42a1-bb5f-6a1028c793b0` |
 | Properties     | Read + Notify                          |
 
-The characteristic value is a 20-byte frame: byte[0] is the version sentinel
-(`0x03`, FRAME_VERSION 3), bytes 1–16 are the encoded sensor data fields
+The characteristic value is a 28-byte frame: byte[0] is the version sentinel
+(`0x04`, FRAME_VERSION 4), bytes 1–16 are the encoded sensor data fields
 (`humidity_pct` and `luminosity_lux` are existing fields in this range), bytes
-17–18 are the rain rate (u16 LE, deci-mm/h, sentinel `u16::MAX`), and byte[19]
-is a diagnostics bitfield:
+17–18 are the rain rate (u16 LE, deci-mm/h, sentinel `u16::MAX`), byte[19] is the
+diagnostics bitfield (below), and bytes 20–27 are the four power fields (each u16
+LE, sentinel `u16::MAX`): `solar_mv` (20–21), `solar_ma` (22–23), `batt_mv`
+(24–25), `load_ma` (26–27). Byte[16] `battery_pct` is derived on-device from
+`batt_mv` via the 1S-LiPo curve. A 28-byte notify needs ATT MTU ≥ 31; the
+trouble-host `DefaultPacketPool` MTU (251) makes the host's default ATT MTU 247,
+which BlueZ negotiates via ATT ExchangeMtu before subscribing — so no MTU code is
+needed. The diagnostics bitfield:
 
 - bit 0 = sky-IR occlusion (MLX90614 sky temp too close to ambient)
 - bit 1 = BMP388 fault
@@ -259,7 +274,8 @@ is a diagnostics bitfield:
 - bit 3 = VEML7700 fault
 - bit 4 = baro divergence (BMP388 vs BME280 temp/pressure disagree beyond threshold)
 - bit 5 = MLX90614 fault
-- bits 6–7 reserved
+- bit 6 = INA219 PV fault (panel-side monitor)
+- bit 7 = INA219 battery fault (battery-side monitor)
 
 Frame encoding and decoding live in `meteo-lib::ble::frame` (`Telemetry`,
 `encode`, `decode`, `FrameError`). The `decode()` path is built for a future Linux
@@ -364,7 +380,7 @@ acceptance — the link must hold and repeat over a sustained run.
 
 `ble_notify_check.sh` connects, then subscribes via BlueZ **`AcquireNotify`** (a
 python-dbus reader), captures frames for `WINDOW_SECS` (default 15 s), and asserts
-at least `MIN_FRAMES` (default 5) 20-byte frames with byte[0] == 0x03. It uses
+at least `MIN_FRAMES` (default 5) 28-byte frames with byte[0] == 0x04. It uses
 `AcquireNotify` — **not** bluetoothctl's `notify on` output — because BlueZ only
 re-emits the `Value` property when it _changes_, and the near-constant telemetry
 gets deduped to silence even while notifications flow on-air; `AcquireNotify`
