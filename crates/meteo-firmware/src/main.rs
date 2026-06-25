@@ -19,6 +19,7 @@ mod ble;
 mod bme;
 mod bmp;
 mod bus;
+mod config;
 mod ina;
 mod mlx;
 mod rain;
@@ -31,6 +32,9 @@ use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
+use esp_bootloader_esp_idf::partitions::{
+    DataPartitionSubType, PartitionType, read_partition_table,
+};
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
 use esp_hal::i2c::master::{Config as I2cConfig, I2c};
@@ -40,6 +44,7 @@ use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::Config as BleConfig;
 use esp_radio::ble::controller::BleConnector;
+use esp_storage::FlashStorage;
 use {esp_backtrace as _, esp_println as _};
 
 use crate::bus::{I2C_BUS, SharedI2c};
@@ -89,6 +94,23 @@ async fn main(spawner: Spawner) {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let sw_int = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
+
+    // Flash-backed config: read the NVS partition range from the partition table,
+    // then hand the FlashStorage singleton to the config task. The partition-table
+    // read only borrows `flash` for the duration of the call; the move into
+    // `config::run` happens afterward, so there is no borrow/move conflict.
+    let mut flash = FlashStorage::new(peripherals.FLASH);
+    let flash_range = {
+        // 512 B buffer: 16 × 32-byte entries — ample for any typical table.
+        let mut pt_buf = [0_u8; 512];
+        let pt = read_partition_table(&mut flash, &mut pt_buf).expect("partition table");
+        let nvs = pt
+            .find_partition(PartitionType::Data(DataPartitionSubType::Nvs))
+            .expect("nvs partition lookup")
+            .expect("nvs partition present");
+        nvs.offset()..nvs.offset().saturating_add(nvs.len())
+    };
+    spawner.spawn(config::run(flash, flash_range).expect("config task already spawned"));
 
     // RWDT supervisor: create the RTC handle and spawn the watchdog task.
     // Rtc::new takes LPWR; the supervisor feeds the RWDT while all tasks beat.

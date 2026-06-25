@@ -29,6 +29,8 @@ esp-sync = { workspace = true }
 trouble-host = { workspace = true }
 embassy-embedded-hal = { workspace = true }
 static_cell = { workspace = true }
+esp-storage = { workspace = true }
+sequential-storage = { workspace = true }
 
 [lints]
 workspace = true

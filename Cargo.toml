@@ -10,7 +10,7 @@ resolver = "3"
 version = "0.1.0"
 authors = ["Vincent Berthier <vincent.berthier@posteo.org>"]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.96"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -51,6 +51,8 @@ embassy-embedded-hal = { version = "0.6", default-features = false }
 static_cell = "2.1"
 esp-backtrace = { version = "0.19", features = ["esp32h2", "panic-handler", "defmt"] }
 esp-bootloader-esp-idf = { version = "0.5", features = ["esp32h2"] }
+esp-storage = { version = "0.9", features = ["esp32h2"] }
+sequential-storage = "7"
 
 # Dev dependencies
 test-log = "0.2"
