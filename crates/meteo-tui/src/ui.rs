@@ -1,9 +1,6 @@
 //! Ratatui UI rendering — one `render` function that draws the full dashboard
 //! for a single frame.
 
-// render is not yet called from main.rs; wired in substep 7.
-#![allow(dead_code, reason = "consumed by main.rs wiring in substep 7")]
-
 use std::time::Instant;
 
 use ratatui::Frame;
@@ -15,7 +12,7 @@ use ratatui::widgets::{
 };
 
 use crate::app::{AppState, STALE_AFTER};
-use crate::model::{self, ConnState, Series};
+use crate::model::{self, Series, SignalState};
 
 /// Draw the full dashboard for one frame.
 ///
@@ -24,47 +21,41 @@ use crate::model::{self, ConnState, Series};
 pub fn render(frame: &mut Frame, app: &mut AppState, now: Instant) {
     let [header, table_area, charts] = Layout::vertical([
         Constraint::Length(3),
-        Constraint::Length(13),
+        Constraint::Length(14),
         Constraint::Min(0),
     ])
     .areas(frame.area());
 
     // Immutable borrows must be fully consumed before the mutable borrow for
     // render_charts below.  The render_* calls are sequenced accordingly.
-    render_header(frame, header, app);
+    render_header(frame, header, app, now);
     render_table(frame, table_area, app, now);
     render_charts(frame, charts, app);
 }
 
-/// Render the top header strip: clock | version info | connection status.
-fn render_header(frame: &mut Frame, area: Rect, app: &AppState) {
-    let [clock, versions, status] = Layout::horizontal([Constraint::Ratio(1, 3); 3]).areas(area);
+/// Render the top header strip: clock | app version | signal status.
+fn render_header(frame: &mut Frame, area: Rect, app: &AppState, now: Instant) {
+    let [clock, version, status] = Layout::horizontal([Constraint::Ratio(1, 3); 3]).areas(area);
 
     frame.render_widget(
         Paragraph::new(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()),
         clock,
     );
-    frame.render_widget(
-        Paragraph::new(format!(
-            "app v{}  fw {}",
-            app.app_version,
-            app.fw_version.as_deref().unwrap_or("unknown")
-        )),
-        versions,
-    );
+    frame.render_widget(Paragraph::new(format!("app v{}", app.app_version)), version);
 
-    let color = match app.conn {
-        ConnState::Live => Color::Green,
-        ConnState::Reconnecting => Color::Red,
-        ConnState::Scanning | ConnState::Connecting | ConnState::Resolving => Color::Yellow,
+    let sig = app.signal_state(now);
+    let color = match sig {
+        SignalState::Live => Color::Green,
+        SignalState::Stale => Color::Yellow,
+        SignalState::NoSignal => Color::Red,
     };
     frame.render_widget(
-        Paragraph::new(app.conn.label()).style(Style::new().fg(color)),
+        Paragraph::new(sig.label()).style(Style::new().fg(color)),
         status,
     );
 }
 
-/// Render the telemetry table with eleven rows (ten values + diagnostics).
+/// Render the telemetry table with twelve rows (eleven values + diagnostics).
 ///
 /// Values are dimmed cosmetically when the last frame is older than
 /// [`STALE_AFTER`]. The diagnostics row is highlighted in red when any
@@ -85,6 +76,10 @@ fn render_table(frame: &mut Frame, area: Rect, app: &AppState, now: Instant) {
             model::fmt_battery_status(t.batt_mv, t.battery_pct),
         ),
         ("Load", model::fmt_load(t.batt_mv, t.load_ma)),
+        (
+            "Location",
+            model::fmt_location(t.latitude_deg, t.longitude_deg, t.altitude_m),
+        ),
     ];
     let base = if app.is_stale(now, STALE_AFTER) {
         Style::new().add_modifier(Modifier::DIM)
@@ -272,14 +267,13 @@ mod tests {
 
     use super::*;
     use crate::ble::BleEvent;
-    use crate::model::ConnState;
 
     type TestResult = result::Result<(), Box<dyn error::Error>>;
 
     #[test]
     fn render_smoke_fills_buffer_without_panic() -> TestResult {
         // Given — tall enough that all six charts get room for their axis titles
-        // (header 3 + table 13 + six charts; ~7 rows/chart at 60 lines).
+        // (header 3 + table 14 + six charts; ~7 rows/chart at 60 lines).
         let backend = ratatui::backend::TestBackend::new(120, 60);
         let mut terminal = ratatui::Terminal::new(backend)?;
         let now = Instant::now();
@@ -290,13 +284,13 @@ mod tests {
             pressure_hpa: Some(1013.25),
             ..meteo_lib::Telemetry::empty()
         };
+        // Feed a fresh frame so signal_state returns Live.
         app.apply(BleEvent::Frame(t), now);
-        app.apply(BleEvent::State(ConnState::Live), now);
 
         // When
         terminal.draw(|f| render(f, &mut app, now))?;
 
-        // Then — buffer must contain the connection label and app version prefix
+        // Then — buffer must contain the signal label and app version prefix
         let buffer_text: String = terminal
             .backend()
             .buffer()
@@ -332,6 +326,10 @@ mod tests {
             buffer_text.contains("OK"),
             "buffer should contain 'OK' for a clear diagnostics field; got: {buffer_text:?}"
         );
+        assert!(
+            buffer_text.contains("Location"),
+            "buffer should contain 'Location'; got: {buffer_text:?}"
+        );
 
         Ok(())
     }
@@ -348,7 +346,6 @@ mod tests {
             ..meteo_lib::Telemetry::empty()
         };
         app.apply(BleEvent::Frame(t), now);
-        app.apply(BleEvent::State(ConnState::Live), now);
 
         // When
         terminal.draw(|f| render(f, &mut app, now))?;

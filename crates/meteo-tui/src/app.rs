@@ -3,33 +3,25 @@
 //! [`AppState`] holds all render-time state. The [`AppState::apply`] method is a
 //! pure reducer over [`BleEvent`]s, injecting `now: Instant` for testability.
 //!
-//! Link-state is authoritative (driven by [`crate::ble::BleEvent::State`]); frame
-//! age is cosmetic only (drives value greying, never reconnection).
-
-// All public items in this module are consumed by main.rs wiring and the UI added
-// in substeps 6–7; suppress the dead_code lint that fires until then.
-#![allow(dead_code, reason = "consumed by main.rs wiring + ui in substeps 6–7")]
+//! Signal state is derived purely from frame age; data silence is cosmetic only
+//! (drives value greying) and is never used to trigger a reconnect.
 
 use std::time::{Duration, Instant};
 
 use meteo_lib::Telemetry;
 
 use crate::ble::BleEvent;
-use crate::model::{ConnState, Series};
+use crate::model::{Series, SignalState};
 
 /// How long without a frame before values are considered cosmetically stale.
 pub const STALE_AFTER: Duration = Duration::from_secs(5);
 
 /// All render-time state for the TUI dashboard.
 pub struct AppState {
-    /// Current BLE connection state (authoritative).
-    pub conn: ConnState,
     /// Most-recently decoded telemetry frame.
     pub latest: Telemetry,
     /// Wall-clock instant of the last successfully decoded frame, if any.
     pub last_frame_at: Option<Instant>,
-    /// DIS Firmware Revision String read from the peripheral, if available.
-    pub fw_version: Option<String>,
     /// Version string of this application binary.
     pub app_version: &'static str,
     /// Rolling temperature time series (seconds since session start, °C).
@@ -53,10 +45,8 @@ impl AppState {
     #[must_use]
     pub fn new(now: Instant) -> Self {
         Self {
-            conn: ConnState::Scanning,
             latest: Telemetry::empty(),
             last_frame_at: None,
-            fw_version: None,
             app_version: env!("CARGO_PKG_VERSION"),
             temp: Series::new(Series::DEFAULT_CAP),
             sky: Series::new(Series::DEFAULT_CAP),
@@ -72,42 +62,44 @@ impl AppState {
     ///
     /// `now` is injected so tests can control the clock without real sleeps.
     pub fn apply(&mut self, ev: BleEvent, now: Instant) {
-        match ev {
-            BleEvent::State(s) => self.conn = s,
-            BleEvent::Firmware(v) => self.fw_version = v,
-            BleEvent::Frame(t) => {
-                // Extract optional fields before moving `t` into `self.latest`.
-                // Telemetry is Copy, so this is a no-op reorder, but kept explicit
-                // for clarity and to be safe if Copy is ever removed.
-                let temp_c = t.temperature_c;
-                let sky_c = t.sky_temp_c;
-                let press_hpa = t.pressure_hpa;
-                let lux = t.luminosity_lux;
-                let wind_ms = t.wind_speed_ms;
-                let humidity = t.humidity_pct;
-                self.latest = t;
-                self.last_frame_at = Some(now);
-                let secs = now.duration_since(self.started).as_secs_f64();
-                if let Some(v) = temp_c {
-                    self.temp.push(secs, f64::from(v));
-                }
-                if let Some(v) = sky_c {
-                    self.sky.push(secs, f64::from(v));
-                }
-                if let Some(v) = press_hpa {
-                    self.pressure.push(secs, f64::from(v));
-                }
-                if let Some(v) = lux {
-                    self.lux.push(secs, f64::from(v));
-                }
-                if let Some(v) = wind_ms {
-                    self.wind.push(secs, f64::from(v));
-                }
-                if let Some(v) = humidity {
-                    self.humidity.push(secs, f64::from(v));
-                }
-            }
+        let BleEvent::Frame(t) = ev;
+        // Extract optional fields before moving `t` into `self.latest`.
+        let temp_c = t.temperature_c;
+        let sky_c = t.sky_temp_c;
+        let press_hpa = t.pressure_hpa;
+        let lux = t.luminosity_lux;
+        let wind_ms = t.wind_speed_ms;
+        let humidity = t.humidity_pct;
+        self.latest = t;
+        self.last_frame_at = Some(now);
+        let secs = now.duration_since(self.started).as_secs_f64();
+        if let Some(v) = temp_c {
+            self.temp.push(secs, f64::from(v));
         }
+        if let Some(v) = sky_c {
+            self.sky.push(secs, f64::from(v));
+        }
+        if let Some(v) = press_hpa {
+            self.pressure.push(secs, f64::from(v));
+        }
+        if let Some(v) = lux {
+            self.lux.push(secs, f64::from(v));
+        }
+        if let Some(v) = wind_ms {
+            self.wind.push(secs, f64::from(v));
+        }
+        if let Some(v) = humidity {
+            self.humidity.push(secs, f64::from(v));
+        }
+    }
+
+    /// Derive the current [`SignalState`] from the age of the last received frame.
+    ///
+    /// **Cosmetic only** — drives header colour and value greying. Must never
+    /// be used to trigger a reconnect.
+    #[must_use]
+    pub fn signal_state(&self, now: Instant) -> SignalState {
+        SignalState::from_age(self.last_frame_at, now, STALE_AFTER)
     }
 
     /// Returns `true` when no frame has arrived, or the last frame arrived more
@@ -135,7 +127,6 @@ mod tests {
     use test_log::test;
 
     use super::*;
-    use crate::model::ConnState;
 
     type TestResult = result::Result<(), Box<dyn error::Error>>;
 
@@ -194,36 +185,6 @@ mod tests {
     }
 
     #[test]
-    fn apply_state_updates_conn() -> TestResult {
-        // Given
-        let base = Instant::now();
-        let mut app = AppState::new(base);
-
-        // When
-        app.apply(BleEvent::State(ConnState::Reconnecting), base);
-
-        // Then
-        assert_eq!(app.conn, ConnState::Reconnecting);
-
-        Ok(())
-    }
-
-    #[test]
-    fn apply_firmware_sets_version() -> TestResult {
-        // Given
-        let base = Instant::now();
-        let mut app = AppState::new(base);
-
-        // When
-        app.apply(BleEvent::Firmware(Some("0.1.0".to_owned())), base);
-
-        // Then
-        assert_eq!(app.fw_version, Some("0.1.0".to_owned()));
-
-        Ok(())
-    }
-
-    #[test]
     fn is_stale_true_before_first_frame() -> TestResult {
         // Given
         let base = Instant::now();
@@ -277,6 +238,44 @@ mod tests {
 
         // Then — STALE_AFTER + 1 s after the frame → stale
         assert!(app.is_stale(base + STALE_AFTER + Duration::from_secs(1), STALE_AFTER));
+
+        Ok(())
+    }
+
+    #[test]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "test: Instant + Duration cannot overflow in practice"
+    )]
+    fn signal_state_transitions() -> TestResult {
+        // Given
+        let base = Instant::now();
+        let mut app = AppState::new(base);
+
+        // No frame yet → NoSignal
+        assert_eq!(app.signal_state(base), SignalState::NoSignal);
+
+        // When — apply a frame at `base`
+        let t = Telemetry {
+            temperature_c: Some(20.0),
+            ..Telemetry::empty()
+        };
+        app.apply(BleEvent::Frame(t), base);
+
+        // Then — immediately → Live
+        assert_eq!(app.signal_state(base), SignalState::Live);
+
+        // Then — 1 s later, still within STALE_AFTER (5 s) → Live
+        assert_eq!(
+            app.signal_state(base + Duration::from_secs(1)),
+            SignalState::Live
+        );
+
+        // Then — STALE_AFTER + 1 s later → Stale
+        assert_eq!(
+            app.signal_state(base + STALE_AFTER + Duration::from_secs(1)),
+            SignalState::Stale
+        );
 
         Ok(())
     }
