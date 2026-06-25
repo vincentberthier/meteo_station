@@ -32,9 +32,10 @@ const AGG_CONFIG: AggregatorConfig = AggregatorConfig {
 };
 
 /// Inter-task sensor channel: every sensor task sends `SensorReading`s here; the
-/// aggregator is the sole receiver. Capacity 8 ≫ the 4 producers at ≤1 Hz
-/// (BMP388, MLX90614, BME280, VEML7700).
-pub static SENSOR_CHANNEL: Channel<CriticalSectionRawMutex, SensorReading, 8> = Channel::new();
+/// aggregator is the sole receiver. Capacity 16 ≫ the 9 producers at ≤1 Hz
+/// (BMP388, MLX90614, BME280, VEML7700, anemometer, vane, rain, INA219 PV,
+/// INA219 batt).
+pub static SENSOR_CHANNEL: Channel<CriticalSectionRawMutex, SensorReading, 16> = Channel::new();
 
 #[embassy_executor::task]
 pub async fn run() {

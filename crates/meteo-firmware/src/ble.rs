@@ -155,7 +155,11 @@ pub async fn run(controller: Controller) {
         ..
     } = stack.build();
 
-    // Storage buffer for the 18-byte telemetry value; lives for the duration of `run`.
+    // Storage buffer for the telemetry value (FRAME_LEN = 28 bytes in v4); lives for
+    // the duration of `run`. A 28-byte notify needs ATT MTU ≥ 31; the DefaultPacketPool
+    // MTU (251) makes the host's default ATT MTU 247, and a central (e.g. BlueZ)
+    // negotiates that via ATT ExchangeMtu before it subscribes to CCCD notifications,
+    // so every delivered notify carries the full 28-byte frame.
     let mut telemetry_storage = [0_u8; meteo_lib::FRAME_LEN];
 
     // Build the attribute table (GAP + GATT mandatory services + MeteoService).

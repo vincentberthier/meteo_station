@@ -1,3 +1,10 @@
+// The defmt::Format derive macro expands to code that indexes internal slices
+// without preceding asserts; this triggers a false-positive lint across the file.
+#![allow(
+    clippy::missing_asserts_for_indexing,
+    reason = "defmt::Format macro expansion triggers this lint as a false positive"
+)]
+
 //! INA219 high-side current / bus-voltage monitor driver.
 //!
 //! Two of these sit on the shared I2C0 bus: U6 @ `0x40` on the PV feed

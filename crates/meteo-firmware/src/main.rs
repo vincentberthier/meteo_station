@@ -19,6 +19,7 @@ mod ble;
 mod bme;
 mod bmp;
 mod bus;
+mod ina;
 mod mlx;
 mod rain;
 mod vane;
@@ -58,6 +59,12 @@ const BME280_ADDR: u8 = 0x76;
 
 /// VEML7700 fixed I2C address (not configurable).
 const VEML7700_ADDR: u8 = 0x10;
+
+/// PV-side INA219 address (U6, A0/A1 → GND): solar panel voltage + harvest current.
+const INA_PV_ADDR: u8 = 0x40;
+
+/// Battery-side INA219 address (U7, A0 → VS): battery voltage + load current.
+const INA_BATT_ADDR: u8 = 0x41;
 
 /// Thin `'static`-spawnable wrapper for the BLE task.
 #[embassy_executor::task]
@@ -109,7 +116,8 @@ async fn main(spawner: Spawner) {
 
     // One-shot I2C bus scan at boot: enumerate every device that ACKs so the log
     // shows what is physically wired before the sensor tasks take the bus. Expected
-    // today: 0x10 VEML7700, 0x5A MLX90614, 0x76 BME280, 0x77 BMP388.
+    // today: 0x10 VEML7700, 0x40 INA219 (PV), 0x41 INA219 (batt), 0x5A MLX90614,
+    // 0x76 BME280, 0x77 BMP388.
     let found = meteo_lib::i2c_scan::scan(&mut i2c).await;
     info!("I2C scan: {} device(s) responding", found.len());
     for &addr in &found {
@@ -130,6 +138,19 @@ async fn main(spawner: Spawner) {
     let veml_i2c: SharedI2c = I2cDevice::new(bus);
     spawner.spawn(
         veml::read_luminosity(veml_i2c, VEML7700_ADDR).expect("read_luminosity already spawned"),
+    );
+
+    // Two INA219 power monitors on the same I2C0 bus: U6 @ 0x40 on the PV feed
+    // (panel V + harvest I), U7 @ 0x41 on the battery feed (battery V + load I).
+    // Both degrade gracefully and bump no watchdog beat.
+    let ina_pv_i2c: SharedI2c = I2cDevice::new(bus);
+    spawner.spawn(
+        ina::read_power(ina_pv_i2c, INA_PV_ADDR, ina::Rail::Solar).expect("ina pv already spawned"),
+    );
+    let ina_batt_i2c: SharedI2c = I2cDevice::new(bus);
+    spawner.spawn(
+        ina::read_power(ina_batt_i2c, INA_BATT_ADDR, ina::Rail::Battery)
+            .expect("ina batt already spawned"),
     );
 
     // Weather meter (SparkFun SEN-15901): anemometer on GPIO22 (J3/9), rain gauge
