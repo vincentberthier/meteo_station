@@ -29,6 +29,10 @@ meteo-lib = { workspace = true }
 meteo-chart = { path = "../meteo-chart" }
 anyhow = { version = "1", optional = true }
 
+[dev-dependencies]
+test-log = { workspace = true }
+env_logger = { workspace = true }
+
 [features]
 default = []
 hydrate = ["leptos/hydrate", "dep:wasm-bindgen", "dep:console_error_panic_hook"]

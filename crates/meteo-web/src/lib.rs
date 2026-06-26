@@ -16,6 +16,19 @@
     clippy::must_use_candidate,
     reason = "leptos #[component] macro rewrites pub fn signatures, dropping the attribute"
 )]
+// meteo-web is a host std binary/library; the no_std-oriented workspace lints
+// that prefer core:: / alloc:: over std:: do not apply here.
+#![allow(
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc,
+    clippy::alloc_instead_of_core,
+    reason = "meteo-web is a host std crate; core/alloc-first lints do not apply"
+)]
+
+pub mod types;
+
+#[cfg(feature = "ssr")]
+pub mod db;
 
 use leptos::prelude::*;
 use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
