@@ -14,7 +14,28 @@ mod plot;
 mod theme;
 mod ui;
 
+use std::time::Duration;
+
 use clap::Parser;
+
+/// Marker style for history charts.
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+enum MarkerArg {
+    /// Individual Braille dots — one glyph per sample (sparse).
+    #[default]
+    Dots,
+    /// Braille line segments connecting consecutive samples.
+    Line,
+}
+
+impl From<MarkerArg> for plot::MarkerStyle {
+    fn from(m: MarkerArg) -> Self {
+        match m {
+            MarkerArg::Dots => Self::Dots,
+            MarkerArg::Line => Self::Line,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(version, about = "MeteoStation live BLE dashboard")]
@@ -22,17 +43,34 @@ struct Cli {
     /// Station BLE address (`BlueZ` display order). Defaults to the firmware address.
     #[arg(long, default_value = "F0:CA:FE:00:00:01")]
     address: String,
+
+    /// Trace marker style for history charts (dots or line).
+    #[arg(long, value_enum, default_value_t = MarkerArg::Dots)]
+    marker_style: MarkerArg,
+
+    /// Draw faint gridlines at 25 / 50 / 75 % in history charts.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    show_grid: bool,
+
+    /// Show the 60-second heading trail in the wind compass.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    gust_trail: bool,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let addr: bluer::Address = cli.address.parse()?;
+    let options = ui::Options {
+        marker_style: cli.marker_style.into(),
+        show_grid: cli.show_grid,
+        gust_trail: cli.gust_trail,
+    };
 
     // ratatui::init() enables raw mode + alternate screen AND installs a panic
     // hook that restores the terminal on panic. ratatui::restore() undoes it.
     let mut terminal: ratatui::DefaultTerminal = ratatui::init();
-    let res = run_app(&mut terminal, addr).await;
+    let res = run_app(&mut terminal, addr, options).await;
     ratatui::restore();
     res
 }
@@ -40,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
 async fn run_app(
     terminal: &mut ratatui::DefaultTerminal,
     addr: bluer::Address,
+    options: ui::Options,
 ) -> anyhow::Result<()> {
     use futures::StreamExt as _;
 
@@ -47,13 +86,15 @@ async fn run_app(
     tokio::spawn(crate::ble::run(tx, addr));
 
     let mut input = crossterm::event::EventStream::new();
-    // Clock refresh cadence: 1 Hz, SOLELY to advance the displayed wall clock and
-    // re-render. This is a display cadence, NOT a readiness sleep — you cannot
-    // observe the wall clock advancing except via a timer. All DATA-driven redraws
-    // happen on BLE/input events below; this tick only keeps the clock live.
-    let mut clock = tokio::time::interval(std::time::Duration::from_secs(1));
+    // Display cadence: 10 Hz, SOLELY to advance the displayed wall clock and
+    // animate the pulsing dot. This is a display cadence, NOT a readiness
+    // sleep — you cannot observe the wall clock advancing except via a timer.
+    // All DATA-driven redraws happen on BLE/input events below; this tick
+    // only keeps the clock and pulse animation live.
+    let mut clock = tokio::time::interval(Duration::from_millis(100));
 
     let mut app = crate::app::AppState::new(std::time::Instant::now());
+    let started = std::time::Instant::now();
     loop {
         tokio::select! {
             Some(ev) = rx.recv() => app.apply(ev, std::time::Instant::now()),
@@ -62,9 +103,20 @@ async fn run_app(
             }
             _ = clock.tick() => {}
         }
-        terminal.draw(|f| crate::ui::render(f, &mut app, std::time::Instant::now()))?;
+        let pulse = pulse_intensity(started.elapsed());
+        terminal.draw(|f| {
+            crate::ui::render(f, &mut app, std::time::Instant::now(), options, pulse);
+        })?;
     }
     Ok(())
+}
+
+/// 1.6 s triangle wave in [0.35,1.0] for the « En direct » dot. Pure.
+fn pulse_intensity(elapsed: Duration) -> f64 {
+    const PERIOD: f64 = 1.6;
+    let phase = (elapsed.as_secs_f64() % PERIOD) / PERIOD; // 0..1
+    let tri = 1.0 - phase.mul_add(2.0, -1.0).abs(); // 0..1..0
+    0.35 + tri * 0.65 // 0.35..1.0
 }
 
 /// Pure: quit on 'q', Esc, or Ctrl-C. Testable (no I/O).
@@ -151,6 +203,29 @@ mod tests {
 
         // Then
         assert!(!result);
+        Ok(())
+    }
+
+    #[test]
+    fn pulse_intensity_bounds() -> TestResult {
+        // Given / When
+        let at_zero = pulse_intensity(Duration::ZERO);
+        let at_800ms = pulse_intensity(Duration::from_millis(800));
+
+        // Then — both are within [0.35, 1.0] and they differ across the cycle
+        assert!(
+            (0.35..=1.0).contains(&at_zero),
+            "pulse at 0ms should be in [0.35, 1.0]; got {at_zero}"
+        );
+        assert!(
+            (0.35..=1.0).contains(&at_800ms),
+            "pulse at 800ms should be in [0.35, 1.0]; got {at_800ms}"
+        );
+        assert!(
+            (at_zero - at_800ms).abs() > f64::EPSILON,
+            "pulse at 0ms ({at_zero}) and 800ms ({at_800ms}) should differ"
+        );
+
         Ok(())
     }
 }

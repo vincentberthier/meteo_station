@@ -29,7 +29,6 @@ use crate::theme;
 /// to [`theme::BASE`] (invisible), `1.0` renders at full [`theme::GREEN`].
 ///
 /// A [`theme::BORDER`]-coloured bottom rule is drawn over `area`.
-#[allow(dead_code, reason = "wired into ui::render in substep 11")]
 pub fn render_header(frame: &mut Frame, area: Rect, app: &AppState, now: Instant, pulse: f64) {
     // Bottom rule drawn first so content paragraphs are painted on top of it.
     frame.render_widget(

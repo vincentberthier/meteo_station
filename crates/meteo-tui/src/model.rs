@@ -1,3 +1,6 @@
+// Old table-renderer formatting helpers and SignalState::label are no longer
+// called from the new submodule render path; pending removal in a cleanup pass.
+#![allow(dead_code, reason = "old table-renderer helpers pending cleanup")]
 //! Pure domain model for the TUI: signal state, telemetry formatting,
 //! and ring-buffer time series.
 

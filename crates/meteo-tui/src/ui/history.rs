@@ -21,7 +21,6 @@ use super::Options;
 ///
 /// `app` is `&mut` because [`crate::model::Series::points`] calls
 /// `make_contiguous` on the internal deque.
-#[allow(dead_code, reason = "wired into ui::render in substep 11")]
 #[expect(
     clippy::too_many_lines,
     reason = "the function is a flat grid of plot calls; splitting would scatter the cohesive layout"

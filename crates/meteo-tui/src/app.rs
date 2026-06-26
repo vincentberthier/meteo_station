@@ -181,6 +181,7 @@ impl AppState {
     /// This is **cosmetic only** — it drives value greying in the UI and must
     /// never be used to trigger a reconnect.
     #[must_use]
+    #[allow(dead_code, reason = "old table-renderer helper pending cleanup")]
     pub fn is_stale(&self, now: Instant, max_age: Duration) -> bool {
         self.last_frame_at
             .is_none_or(|t| now.duration_since(t) > max_age)

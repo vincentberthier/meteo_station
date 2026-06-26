@@ -24,7 +24,6 @@ use crate::theme;
 /// Left region — BLE signal chip (first, always visible) followed by one health
 /// chip per sensor.  Right region — uptime · frame count · last-packet age ·
 /// `● ok  ● alerte  ● panne` legend.
-#[allow(dead_code, reason = "wired into ui::render in substep 11")]
 pub fn render_diagnostics(frame: &mut Frame, area: Rect, app: &AppState, now: Instant) {
     let block = Block::bordered()
         .border_style(Style::new().fg(theme::BORDER))

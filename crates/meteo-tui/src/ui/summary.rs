@@ -22,7 +22,6 @@ use super::Options;
 ///
 /// `app` is `&mut` because the VENT card calls [`crate::model::Series::points`]
 /// (which calls `make_contiguous` internally) on the gust and heading series.
-#[allow(dead_code, reason = "wired into ui::render in substep 11")]
 pub fn render_summary(frame: &mut Frame, area: Rect, app: &mut AppState, options: Options) {
     let [atmo, vent, ener] = Layout::horizontal([Constraint::Ratio(1, 3); 3]).areas(area);
     render_atmosphere(frame, atmo, app);
