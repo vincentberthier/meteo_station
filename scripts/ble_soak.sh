@@ -2,10 +2,18 @@
 # ble_soak.sh — BLE link soak-test harness for gaia (BlueZ 5.86)
 #
 # Purpose:
-#   Continuously exercises the BLE link to the on-chip ESP32-H2 BLE peripheral
-#   (MeteoStation): connect → hold HOLD_SECS → disconnect → gap GAP_SECS →
-#   reconnect → …  Any mid-window drop or failed reconnect produces a loud
-#   non-zero exit.
+#   Continuously exercises the BLE connectable link to the on-chip ESP32-H2
+#   BLE peripheral (MeteoStation): connect → hold HOLD_SECS → disconnect →
+#   gap GAP_SECS → reconnect → …  Any mid-window drop or failed reconnect
+#   produces a loud non-zero exit.
+#
+#   NOTE — meteorological sensor data is now BROADCAST (extended connectable
+#   advertising, ManufacturerData, company-id 0xFFFF); it is NOT carried over
+#   a GATT notify characteristic.  This connect/hold/disconnect cycle validates
+#   the location-config GATT channel (service 7e700010-…, characteristic
+#   7e700011-…) and the retained 8 s supervision-timeout negotiation.
+#   Broadcast continuity (frame rate and payload integrity) is checked
+#   separately by ble_broadcast_check.sh.
 #
 # Environment knobs (all optional, shown with defaults):
 #   DEVICE          — BLE address of the peripheral          (F0:CA:FE:00:00:01)
