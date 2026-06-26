@@ -65,9 +65,19 @@ pub fn render_compass(frame: &mut Frame, area: Rect, data: &CompassData) {
 
     let calm = speed.is_none_or(|s| s < 0.3);
 
+    // Aspect-correct the horizontal data range so the dial renders round rather
+    // than as a wide ellipse. Braille sub-pixels are square at a ~2:1 cell ratio,
+    // so to match data-units-per-pixel on both axes: x_half = y_range · width /
+    // (height · 4). Clamp to >= 1.1 so a tall/narrow panel still shows the full
+    // dial and its cardinals.
+    let y_lo = -1.4_f64;
+    let y_hi = 1.2_f64;
+    let x_half =
+        ((y_hi - y_lo) * f64::from(area.width) / (f64::from(area.height.max(1)) * 4.0)).max(1.1);
+
     let canvas = Canvas::default()
-        .x_bounds([-1.1, 1.1])
-        .y_bounds([-1.4, 1.2])
+        .x_bounds([-x_half, x_half])
+        .y_bounds([y_lo, y_hi])
         .marker(Marker::Braille)
         .background_color(theme::MANTLE)
         .paint(move |ctx| {

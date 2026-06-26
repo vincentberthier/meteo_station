@@ -78,13 +78,50 @@ pub struct PlotSpec<'data> {
     pub bars: Option<Bars<'data>>,
 }
 
-/// Pure: compute fill-column geometry for the gradient under-fill.
+/// Pure: compute continuous fill-column geometry for the gradient under-fill.
 ///
-/// For each `(x, value)` in `points`, returns `(x, y_top, y_bottom)` where
-/// `y_bottom = y_lo` (baseline) and `y_top = value`.  Testable without ratatui.
+/// Walks each consecutive `(x0,y0)→(x1,y1)` segment in steps of `x_step`,
+/// linearly interpolating the trace value, and returns `(x, y_top, y_bottom)`
+/// per column where `y_bottom = y_lo` (baseline) and `y_top` is the interpolated
+/// value. Segments wider than `max_gap` are skipped so a signal-loss gap is left
+/// empty rather than filled with a fabricated ramp. Testable without ratatui.
+///
+/// Returns an empty vector when there are fewer than two points or `x_step`
+/// is non-positive (a single sample has no area to fill).
 #[must_use]
-pub fn fill_columns(points: &[(f64, f64)], y_lo: f64) -> Vec<(f64, f64, f64)> {
-    points.iter().map(|&(x, y)| (x, y, y_lo)).collect()
+pub fn fill_columns(
+    points: &[(f64, f64)],
+    y_lo: f64,
+    x_step: f64,
+    max_gap: f64,
+) -> Vec<(f64, f64, f64)> {
+    let mut cols = Vec::new();
+    if x_step <= 0.0 {
+        return cols;
+    }
+    for pair in points.windows(2) {
+        let &[(x0, y0), (x1, y1)] = pair else {
+            continue;
+        };
+        let span = x1 - x0;
+        if span <= 0.0 || span > max_gap {
+            continue;
+        }
+        // Integer step count avoids a float `while` condition.
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "step count is small, positive and finite (span > 0, x_step > 0)"
+        )]
+        let steps = (span / x_step).ceil() as u32;
+        for i in 0..=steps {
+            let x = f64::from(i).mul_add(x_step, x0).min(x1);
+            let frac = (x - x0) / span;
+            let y_top = frac.mul_add(y1 - y0, y0);
+            cols.push((x, y_top, y_lo));
+        }
+    }
+    cols
 }
 
 /// Render one history plot panel into `area`.
@@ -117,11 +154,19 @@ pub fn render_plot(frame: &mut Frame, area: Rect, spec: &PlotSpec<'_>, series: &
     let y_win_scaled = [y_lo * spec.scale, y_hi * spec.scale];
     let y_labels = model::value_axis_labels(y_win_scaled, spec.prec);
 
+    // Fill is interpolated across the window: ~240 columns for a near-solid area,
+    // skipping segments wider than 8 % of the window so signal-loss gaps stay empty.
+    let x_range = x_win[1] - x_win[0];
     let fill_cols = if spec.fill {
-        fill_columns(pts, y_lo)
+        fill_columns(pts, y_lo, x_range / 240.0, x_range * 0.08)
     } else {
         Vec::new()
     };
+
+    // One canvas cell in data-y units, used to lift the Y-min label one row above
+    // the X-axis label row so they do not collide in the bottom-left corner.
+    let inner_h = area.height.saturating_sub(2).max(1);
+    let cell_y = (y_hi - y_lo) / f64::from(inner_h);
 
     // Extract spec fields before the move closure so we do not borrow spec inside it.
     let show_grid = spec.show_grid;
@@ -195,22 +240,23 @@ pub fn render_plot(frame: &mut Frame, area: Rect, spec: &PlotSpec<'_>, series: &
             // --- Main trace ---
             draw_trace(ctx, pts, trace_color, marker);
 
-            // --- Y-axis labels (top and bottom, left edge) ---
+            // --- Y-axis labels (top-left max; bottom-left min lifted one row up) ---
             let ov1 = Style::new().fg(theme::OVERLAY1);
             ctx.print(
                 x_win[0],
                 y_hi,
                 TextLine::from(Span::styled(y_labels[2].clone(), ov1)),
             );
+            // Lift the min label one cell so it clears the X-axis label row below.
             ctx.print(
                 x_win[0],
-                y_lo,
+                y_lo + cell_y,
                 TextLine::from(Span::styled(y_labels[0].clone(), ov1)),
             );
 
-            // --- X-axis labels: oldest edge, midpoint, newest edge ---
+            // --- X-axis labels: oldest edge, midpoint, newest edge (bottom row) ---
+            // `x_range` is captured from the enclosing scope (computed for the fill).
             let surf2 = Style::new().fg(theme::SURFACE2);
-            let x_range = x_win[1] - x_win[0];
             ctx.print(x_win[0], y_lo, TextLine::from(Span::styled("-10m", surf2)));
             ctx.print(
                 x_win[0] + x_range / 2.0,
@@ -333,27 +379,44 @@ mod tests {
     // --- fill_columns ---
 
     #[test]
-    fn fill_columns_spans_baseline_to_point() -> TestResult {
-        // Given
+    fn fill_columns_interpolates_baseline_to_trace() -> TestResult {
+        // Given — a single rising segment, step 0.5, gap budget 10.
         let pts = [(0.0_f64, 1.0_f64), (1.0, 3.0)];
         let y_lo = 0.0_f64;
 
         // When
-        let cols = fill_columns(&pts, y_lo);
+        let cols = fill_columns(&pts, y_lo, 0.5, 10.0);
 
-        // Then
-        assert_eq!(cols.len(), 2, "should have one tuple per input point");
-        for (idx, &(_, y_top, y_bottom)) in cols.iter().enumerate() {
+        // Then — columns at x = 0.0, 0.5, 1.0 with interpolated tops 1.0, 2.0, 3.0,
+        // each anchored at the baseline.
+        assert_eq!(cols.len(), 3, "expected three interpolated columns");
+        let expected = [(0.0, 1.0), (0.5, 2.0), (1.0, 3.0)];
+        for (idx, (&(x, y_top, y_bottom), &(ex, ey))) in
+            cols.iter().zip(expected.iter()).enumerate()
+        {
+            assert!((x - ex).abs() < 1e-9, "col {idx}: x {x} != {ex}");
             assert!(
-                (y_bottom - 0.0).abs() < f64::EPSILON,
-                "point {idx}: y_bottom should equal y_lo (0.0), got {y_bottom}"
+                (y_top - ey).abs() < 1e-9,
+                "col {idx}: y_top {y_top} != {ey}"
             );
             assert!(
-                (y_top - pts[idx].1).abs() < f64::EPSILON,
-                "point {idx}: y_top should equal data value {}, got {y_top}",
-                pts[idx].1
+                y_bottom.abs() < f64::EPSILON,
+                "col {idx}: y_bottom should equal y_lo (0.0), got {y_bottom}"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn fill_columns_skips_wide_gaps() -> TestResult {
+        // Given — two points 100 apart but a gap budget of only 10.
+        let pts = [(0.0_f64, 1.0_f64), (100.0, 2.0)];
+
+        // When
+        let cols = fill_columns(&pts, 0.0, 1.0, 10.0);
+
+        // Then — the segment exceeds max_gap and is skipped entirely.
+        assert!(cols.is_empty(), "wide gap should produce no fill columns");
         Ok(())
     }
 
