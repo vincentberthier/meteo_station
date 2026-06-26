@@ -38,18 +38,50 @@ pub enum BleEvent {
     Frame(Telemetry),
 }
 
+/// Backoff between discovery (re)establishment attempts. Short enough that the
+/// dashboard recovers within ~1 s of the adapter coming back, long enough to
+/// avoid a busy spin while it is mid-reset.
+const RESCAN_BACKOFF: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// Spawned task: runs the passive-scan loop forever, emitting [`BleEvent::Frame`]s.
 ///
-/// Powers the adapter, sets an LE-only discovery filter with `duplicate_data`
-/// enabled (so every advertisement triggers a `PropertiesChanged` signal), then
-/// watches manufacturer-data property changes from the station device at `addr`.
+/// Resilient to `BlueZ` adapter resets: a single discovery session ends (the
+/// `discover_devices_with_changes` stream returns `None`) or fails to start
+/// whenever the adapter is removed, powered off, or restarted (e.g. a
+/// `bluetoothctl power off/on`). This outer loop re-acquires the adapter and
+/// restarts discovery each time, so the dashboard reconnects on its own instead
+/// of going permanently `Stale`. Only an unrecoverable session failure (no
+/// `D-Bus` / `bluetoothd`) propagates as `Err`.
 pub async fn run(tx: mpsc::Sender<BleEvent>, addr: bluer::Address) -> anyhow::Result<()> {
     let session = bluer::Session::new().await?;
+    loop {
+        // Both a clean stream end (adapter went away) and a setup error mean the
+        // current discovery session is gone; either way, retry. The dashboard's
+        // own `SignalState` surfaces the gap (Live -> Stale) and the recovery
+        // (Stale -> Live) once frames resume, so no separate logging is needed
+        // (the TUI installs no runtime logger and owns the terminal).
+        let _ = scan_session(&session, &tx, addr).await;
+        // Re-check by retrying the real operation each iteration; the backoff
+        // only prevents a tight spin while the adapter is unavailable.
+        tokio::time::sleep(RESCAN_BACKOFF).await;
+    }
+}
+
+/// Runs one discovery session: powers the adapter, sets the LE-only filter, and
+/// pumps advertisement events until the stream ends. Returns `Ok(())` on a clean
+/// stream end (adapter went away) and `Err` if any setup step fails — the caller
+/// retries either way.
+///
+/// `duplicate_data` makes `BlueZ` emit `PropertiesChanged` for `ManufacturerData`
+/// on every received advertisement PDU; `discover_devices_with_changes` re-emits
+/// `DeviceAdded` whenever a discovered device's properties change.
+async fn scan_session(
+    session: &bluer::Session,
+    tx: &mpsc::Sender<BleEvent>,
+    addr: bluer::Address,
+) -> anyhow::Result<()> {
     let adapter = session.default_adapter().await?;
     adapter.set_powered(true).await?;
-
-    // LE-only passive scan; `duplicate_data` makes BlueZ emit PropertiesChanged
-    // for ManufacturerData on every received advertisement PDU.
     adapter
         .set_discovery_filter(bluer::DiscoveryFilter {
             transport: bluer::DiscoveryTransport::Le,
@@ -58,8 +90,6 @@ pub async fn run(tx: mpsc::Sender<BleEvent>, addr: bluer::Address) -> anyhow::Re
         })
         .await?;
 
-    // `discover_devices_with_changes` re-emits DeviceAdded whenever any
-    // property of a discovered device changes — including ManufacturerData.
     let mut events = adapter.discover_devices_with_changes().await?;
     while let Some(ev) = events.next().await {
         if let bluer::AdapterEvent::DeviceAdded(a) = ev {
@@ -70,7 +100,7 @@ pub async fn run(tx: mpsc::Sender<BleEvent>, addr: bluer::Address) -> anyhow::Re
                 continue;
             };
             if let Ok(Some(mfg)) = device.manufacturer_data().await {
-                emit_frame(&tx, &mfg).await;
+                emit_frame(tx, &mfg).await;
             }
         }
     }
@@ -83,7 +113,6 @@ pub async fn run(tx: mpsc::Sender<BleEvent>, addr: bluer::Address) -> anyhow::Re
 /// Try to decode a telemetry frame from `mfg` and send it on `tx`.
 async fn emit_frame(tx: &mpsc::Sender<BleEvent>, mfg: &HashMap<u16, Vec<u8>>) {
     if let Some(t) = decode_frame(mfg) {
-        // Intentionally discard send error: the app may have shut down.
         // Intentionally discard send error: the app may have shut down.
         tx.send(BleEvent::Frame(t)).await.ok();
     }
