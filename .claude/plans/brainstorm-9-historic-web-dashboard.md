@@ -1092,7 +1092,7 @@ Progress tracking (checked during implementation):
 - [x] 6. Catppuccin CSS + fonts + app shell/routing — build.rs generates \_palette.scss (22 vars) from meteo_chart::palette, JetBrains Mono + IBM Plex Sans vendored, compass SVGs vendored, Catppuccin layout (var(--\*), FR strings), App shell + 2 routes, 3 palette tests. Spec review: pass.
 - [x] 7. `PlotPanel` SVG chart + header — ChartSeries + PlotPanel (smoothing, bounds, axis labels, pure project(), CRUST well, gridlines, min–max band, gradient fill, trace) + Header (clock/version/SignalLevel FR), 3 tests. Spec review: pass.
 - [x] 8. Wind compass component — WindCompass (stacked dial+needle SVG imgs, reactive rotation via style:transform, FR overlay: speed/cap°/16-pt rose/rafale), 2 tests. Spec review: pass.
-- [ ] 9. All-panels page (live band + grid + time select)
+- [x] 9. All-panels page (live band + grid + time select) — TimeWindow+bucket ladder+pure zoom_about/pan_by/presets, SSE-fed LiveBand (hydrate-gated EventSource), 9-panel grid (6 CAPTEURS + 3 ÉNERGIE) keyed on window Resource, 4 tests. Pan/zoom via buttons (accepted). Spec review: pass.
 - [ ] 10. Comparison page
 - [ ] 11. Docs + final checks
 

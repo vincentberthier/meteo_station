@@ -4,6 +4,10 @@
 //!  - server binary (`ssr` feature): axum + tokio, runs on `x86_64`/`aarch64`.
 //!  - WASM bundle (`hydrate` feature): runs in the browser for hydration.
 
+// The AllPanelsPage + LiveBand + HistoryGrid composition produces a view type
+// that is deeply monomorphised by the tachys renderer.  The default limit of
+// 128 is insufficient for the combined type tree.
+#![recursion_limit = "512"]
 // Leptos's #[component] macro expands to a typed-builder struct. The generated
 // `builder()` method has the same name as the blanket trait impl, and the
 // generated `pub fn App()` wrapper does not preserve `#[must_use]` placed
@@ -27,6 +31,7 @@
 
 pub mod api;
 pub mod components;
+pub mod pages;
 pub mod types;
 
 #[cfg(feature = "ssr")]
@@ -46,6 +51,7 @@ use leptos_router::{
 };
 
 use components::header::{Header, SignalLevel};
+use pages::all_panels::AllPanelsPage;
 
 /// HTML shell returned for every page request (SSR).
 ///
@@ -93,42 +99,11 @@ pub fn App() -> impl IntoView {
             <div class="page-main">
                 <Header signal_state=signal_state/>
                 <Routes fallback=|| view! { <p>"Page introuvable."</p> }>
-                    <Route path=StaticSegment("") view=DashboardPage/>
+                    <Route path=StaticSegment("") view=AllPanelsPage/>
                     <Route path=StaticSegment("comparaison") view=ComparaisonPage/>
                 </Routes>
             </div>
         </Router>
-    }
-}
-
-/// Live dashboard placeholder (route `/`).
-#[component]
-fn DashboardPage() -> impl IntoView {
-    view! {
-        <div class="content-area">
-            <div class="live-band">
-                <span class="live-label">"En direct"</span>
-            </div>
-            <div class="history-grid">
-                <div class="chart-panel">
-                    <div class="chart-panel-header">"Température de l'air"</div>
-                    <div class="chart-panel-body"></div>
-                </div>
-                <div class="chart-panel">
-                    <div class="chart-panel-header">"Vitesse du vent"</div>
-                    <div class="chart-panel-body">
-                        <span class="wind-summary">
-                            <span class="color-sky">"— m/s"</span>
-                            <span class="gust-label">"rafale"</span>
-                        </span>
-                    </div>
-                </div>
-                <div class="chart-panel">
-                    <div class="chart-panel-header">"Pression"</div>
-                    <div class="chart-panel-body"></div>
-                </div>
-            </div>
-        </div>
     }
 }
 
