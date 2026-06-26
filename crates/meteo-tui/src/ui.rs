@@ -1,6 +1,8 @@
 //! Ratatui UI rendering — one `render` function that draws the full dashboard
 //! for a single frame.
 
+pub mod header;
+
 use std::time::Instant;
 
 use ratatui::Frame;
