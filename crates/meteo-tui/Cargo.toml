@@ -18,6 +18,11 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 uuid = { version = "1", features = ["macro-diagnostics"] }  # uuid! macro support; unifies with bluer's uuid 1.x
+# Image-based chart + compass rendering over the terminal graphics protocol
+# (Kitty / iTerm2 / Sixel; WezTerm-confirmed). ratatui-image 11 tracks ratatui 0.30.
+ratatui-image = "11"
+image = { version = "0.25", default-features = false, features = ["png"] }
+imageproc = { version = "0.25", default-features = false }
 
 [dev-dependencies]
 test-log = { workspace = true }
