@@ -30,6 +30,9 @@ pub mod types;
 #[cfg(feature = "ssr")]
 pub mod db;
 
+#[cfg(feature = "ssr")]
+pub mod collector;
+
 use leptos::prelude::*;
 use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
 use leptos_router::{

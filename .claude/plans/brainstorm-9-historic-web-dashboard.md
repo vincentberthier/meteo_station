@@ -1087,7 +1087,7 @@ Progress tracking (checked during implementation):
 - [x] 1. `meteo-chart` extraction + `meteo-tui` migration — created meteo-chart (palette+chart+format, 27 tests), migrated meteo-tui via re-export; theme derives from palette; wasm32 build confirmed. Spec review: pass.
 - [x] 2. `meteo-web` skeleton + cargo-leptos wiring (SSR hello) — Leptos 0.8 axum SSR shell, 2 routes, wasm-release profile, web-\* recipes; SSR+wasm build green. Spec review: pass. (i2c_scan pre-existing clippy fix split into separate fix changeset.)
 - [x] 3. SQLite storage layer — types.rs DTOs (wasm-safe) + ssr-only db/ (DbHandle, BucketRow, schema, weighted re-aggregation, Rust-side power_w, history_impl/comparison_impl), 6 tests. Spec review: pass.
-- [ ] 4. Collector task + pure bucket accumulator
+- [x] 4. Collector task + pure bucket accumulator — ssr-only collector (bluer passive scan, observer-based reconnect, no sleep) + pure BucketAccumulator (vector-mean wind dir, None-skipping), 6 tests. Spec review: pass.
 - [ ] 5. Server functions + SSE live endpoint
 - [ ] 6. Catppuccin CSS + fonts + app shell/routing
 - [ ] 7. `PlotPanel` SVG chart + header
