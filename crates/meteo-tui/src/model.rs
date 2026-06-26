@@ -1,13 +1,8 @@
-// Old table-renderer formatting helpers and SignalState::label are no longer
-// called from the new submodule render path; pending removal in a cleanup pass.
-#![allow(dead_code, reason = "old table-renderer helpers pending cleanup")]
 //! Pure domain model for the TUI: signal state, telemetry formatting,
 //! and ring-buffer time series.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
-
-use meteo_lib::Diagnostics;
 
 /// Dashboard signal state derived purely from frame age.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,16 +28,6 @@ impl SignalState {
             Some(_) => Self::Live,
         }
     }
-
-    /// Status-bar label.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::NoSignal => "No signal",
-            Self::Live => "Live",
-            Self::Stale => "Stale",
-        }
-    }
 }
 
 /// Format the station location row.
@@ -61,43 +46,10 @@ pub fn fmt_location(lat: Option<f32>, lon: Option<f32>, alt: Option<f32>) -> Str
     }
 }
 
-/// Format a temperature value for display.
-///
-/// Returns `"N/A"` for `None`, otherwise `"{value:.1} °C"`.
-#[must_use]
-pub fn fmt_temp(v: Option<f32>) -> String {
-    fmt_unit(v, "°C", 1)
-}
-
-/// Format a pressure value for display.
-///
-/// Returns `"N/A"` for `None`, otherwise `"{value:.1} hPa"`.
-#[must_use]
-pub fn fmt_pressure(v: Option<f32>) -> String {
-    fmt_unit(v, "hPa", 1)
-}
-
-/// Format a relative-humidity value for display.
-///
-/// Returns `"N/A"` for `None`, otherwise `"{value:.0} %RH"`.
-#[must_use]
-pub fn fmt_humidity(v: Option<f32>) -> String {
-    fmt_unit(v, "%RH", 0)
-}
-
-/// Format an illuminance value for display.
-///
-/// Returns `"N/A"` for `None`, otherwise `"{value:.0} lux"`.
-#[must_use]
-pub fn fmt_lux(v: Option<f32>) -> String {
-    fmt_unit(v, "lux", 0)
-}
-
 /// Format luminosity in kilolux.
 ///
 /// Returns `"N/A"` for `None`, otherwise `"{value:.1} klx"`.
 #[must_use]
-#[allow(dead_code, reason = "wired in a later rendering substep")]
 pub fn fmt_lux_klx(lux: Option<f32>) -> String {
     lux.map_or_else(
         || "N/A".to_owned(),
@@ -105,36 +57,11 @@ pub fn fmt_lux_klx(lux: Option<f32>) -> String {
     )
 }
 
-/// 16-point compass label for a heading in degrees.
-///
-/// Convention: 0°=N, 90°=E, 180°=S, 270°=W (matches the firmware's
-/// `weather_meter::VANE_TABLE`). The heading is normalised to `[0, 360)` and
-/// bucketed into 22.5° sectors.
-#[must_use]
-pub fn compass_label(deg: f32) -> &'static str {
-    const POINTS: [&str; 16] = [
-        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW",
-        "NW", "NNW",
-    ];
-    let norm = deg.rem_euclid(360.0);
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "round() of a value in [0,16] is a small non-negative whole number"
-    )]
-    let sector = (norm / 22.5).round() as usize;
-    // 360° rounds up to sector 16, which wraps back to N (sector 0).
-    let idx = if sector >= POINTS.len() { 0 } else { sector };
-    POINTS[idx]
-}
-
 /// French 16-point compass label for a heading in degrees.
 ///
-/// Convention: 0°=N, 90°=E, 180°=S, 270°=O (Ouest). Same bucketing as
-/// [`compass_label`]; returns the French rose:
-/// `N NNE NE ENE E ESE SE SSE S SSO SO OSO O ONO NO NNO`.
+/// Convention: 0°=N, 90°=E, 180°=S, 270°=O (Ouest). 22.5° sector bucketing;
+/// returns the French rose: `N NNE NE ENE E ESE SE SSE S SSO SO OSO O ONO NO NNO`.
 #[must_use]
-#[allow(dead_code, reason = "wired in a later rendering substep")]
 pub fn compass_label_fr(deg: f32) -> &'static str {
     const POINTS: [&str; 16] = [
         "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSO", "SO", "OSO", "O", "ONO",
@@ -152,95 +79,16 @@ pub fn compass_label_fr(deg: f32) -> &'static str {
     POINTS[idx]
 }
 
-/// Format wind speed and direction as one combined cell.
-///
-/// `"N/A"` when both are `None`; otherwise e.g. `"3.5 m/s, 270° (W)"`, gracefully
-/// dropping whichever half is missing.
-#[must_use]
-pub fn fmt_wind(speed: Option<f32>, dir: Option<f32>) -> String {
-    match (speed, dir) {
-        (None, None) => "N/A".to_owned(),
-        (Some(s), None) => format!("{s:.1} m/s"),
-        (None, Some(d)) => format!("{d:.0}° ({})", compass_label(d)),
-        (Some(s), Some(d)) => format!("{s:.1} m/s, {d:.0}° ({})", compass_label(d)),
-    }
-}
-
-/// Format a rainfall-rate value for display.
-///
-/// Returns `"N/A"` for `None`, otherwise `"{value:.1} mm/h"`.
-#[must_use]
-pub fn fmt_rain(v: Option<f32>) -> String {
-    fmt_unit(v, "mm/h", 1)
-}
-
-/// Format the solar-panel reading: voltage, current (mA), and derived power.
-///
-/// `"N/A"` when voltage is missing; otherwise `"{V:.2} V, {mA} mA ({W:.2} W)"`,
-/// dropping the current/power tail when current is missing.
-#[must_use]
-pub fn fmt_solar(mv: Option<u16>, ma: Option<u16>) -> String {
-    mv.map_or_else(
-        || "N/A".to_owned(),
-        |raw_mv| {
-            let v = f64::from(raw_mv) / 1000.0;
-            ma.map_or_else(
-                || format!("{v:.2} V"),
-                |raw_ma| {
-                    let w = v * (f64::from(raw_ma) / 1000.0);
-                    format!("{v:.2} V, {raw_ma} mA ({w:.2} W)")
-                },
-            )
-        },
-    )
-}
-
-/// Format the battery status: voltage and derived charge percentage.
-///
-/// `"N/A"` when both are missing; otherwise `"{V:.2} V, {pct} %"`, dropping
-/// whichever half is missing.
-#[must_use]
-pub fn fmt_battery_status(mv: Option<u16>, pct: Option<u8>) -> String {
-    match (mv, pct) {
-        (None, None) => "N/A".to_owned(),
-        (Some(raw_mv), Some(p)) => format!("{:.2} V, {p} %", f64::from(raw_mv) / 1000.0),
-        (Some(raw_mv), None) => format!("{:.2} V", f64::from(raw_mv) / 1000.0),
-        (None, Some(p)) => format!("{p} %"),
-    }
-}
-
-/// Format the load reading: current (mA), plus power derived from the battery voltage.
-///
-/// `"N/A"` when current is missing; otherwise `"{mA} mA ({W:.2} W)"`, dropping
-/// the power term when the battery voltage is unavailable.
-#[must_use]
-pub fn fmt_load(batt_mv: Option<u16>, ma: Option<u16>) -> String {
-    ma.map_or_else(
-        || "N/A".to_owned(),
-        |raw_ma| {
-            batt_mv.map_or_else(
-                || format!("{raw_ma} mA"),
-                |mv| {
-                    let w = (f64::from(mv) / 1000.0) * (f64::from(raw_ma) / 1000.0);
-                    format!("{raw_ma} mA ({w:.2} W)")
-                },
-            )
-        },
-    )
-}
-
 /// Power in watts from bus millivolts × current milliamperes.
 ///
 /// Returns `(mv / 1000) × (ma / 1000)` as `Some(f64)`, or `None` if either
 /// input is `None`.
 #[must_use]
-#[allow(dead_code, reason = "wired in a later rendering substep")]
 pub fn power_w(mv: Option<u16>, ma: Option<u16>) -> Option<f64> {
     Some((f64::from(mv?) / 1000.0) * (f64::from(ma?) / 1000.0))
 }
 
 /// Nominal 1S-LiPo energy budget for the crude autonomy estimate (best-effort).
-#[allow(dead_code, reason = "wired in a later rendering substep")]
 pub const BATTERY_WH: f64 = 9.6; // 3.7 V × 2.6 Ah
 
 /// Battery flow status line for the ÉNERGIE card.
@@ -253,7 +101,6 @@ pub const BATTERY_WH: f64 = 9.6; // 3.7 V × 2.6 Ah
 ///
 /// Returns `"N/A"` when either power reading is `None`.
 #[must_use]
-#[allow(dead_code, reason = "wired in a later rendering substep")]
 pub fn fmt_battery_flow(solar_w: Option<f64>, load_w: Option<f64>, pct: Option<u8>) -> String {
     let (Some(s), Some(l)) = (solar_w, load_w) else {
         return "N/A".to_owned();
@@ -272,67 +119,11 @@ pub fn fmt_battery_flow(solar_w: Option<f64>, load_w: Option<f64>, pct: Option<u
     }
 }
 
-/// Format the diagnostics bitfield as a human-readable status line.
-///
-/// `"OK"` when no flags are set; otherwise a comma-joined list of active faults,
-/// e.g. `"sky occluded, BMP388 fault"`. Scales as new flags are added.
-#[must_use]
-pub fn fmt_diagnostics(diag: Diagnostics) -> String {
-    let mut flags: Vec<&str> = Vec::new();
-    if diag.occlusion() {
-        flags.push("sky occluded");
-    }
-    if diag.baro_fault() {
-        flags.push("BMP388 fault");
-    }
-    if diag.bme280_fault() {
-        flags.push("BME280 fault");
-    }
-    if diag.veml7700_fault() {
-        flags.push("VEML7700 fault");
-    }
-    if diag.baro_divergence() {
-        flags.push("baro divergence");
-    }
-    if diag.mlx90614_fault() {
-        flags.push("MLX90614 fault");
-    }
-    if diag.ina_pv_fault() {
-        flags.push("INA PV fault");
-    }
-    if diag.ina_batt_fault() {
-        flags.push("INA batt fault");
-    }
-    if flags.is_empty() {
-        "OK".to_owned()
-    } else {
-        flags.join(", ")
-    }
-}
-
-/// `true` if any diagnostics flag is set (drives red highlighting in the UI).
-///
-/// Tests the raw byte (`Diagnostics.0` is `pub`) so it covers every current and
-/// future flag with no per-bit update — unlike `fmt_diagnostics`, which must name
-/// each flag to label it.
-#[must_use]
-pub const fn diagnostics_alert(diag: Diagnostics) -> bool {
-    diag.0 != 0
-}
-
-/// Format a floating-point sensor value with a physical unit.
-///
-/// Returns `"N/A"` when `v` is `None`; otherwise renders `"{v:.prec$} {unit}"`.
-fn fmt_unit(v: Option<f32>, unit: &str, prec: usize) -> String {
-    v.map_or_else(|| "N/A".to_owned(), |x| format!("{x:.prec$} {unit}"))
-}
-
 /// Dew point in °C computed from the Magnus/WMO formula (a=17.62, b=243.12 °C).
 ///
 /// `Td = b·γ / (a−γ)` with `γ = ln(rh/100) + a·t/(b+t)`.
 /// `rh` is clamped to `(0.01, 100]` to avoid `ln(0)`.
 #[must_use]
-#[allow(dead_code, reason = "wired in a later rendering substep")]
 pub fn dew_point_c(temp_c: f32, rh_pct: f32) -> f32 {
     const A: f32 = 17.62;
     const B: f32 = 243.12;
@@ -343,7 +134,6 @@ pub fn dew_point_c(temp_c: f32, rh_pct: f32) -> f32 {
 
 /// 10-min air-temperature trend classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code, reason = "wired in a later rendering substep")]
 pub enum Trend {
     /// Temperature is increasing.
     Rising,
@@ -358,7 +148,6 @@ pub enum Trend {
 /// Returns [`Trend::Stable`] if `|delta| < eps`, [`Trend::Rising`] for a positive
 /// delta, and [`Trend::Falling`] for a negative delta.
 #[must_use]
-#[allow(dead_code, reason = "wired in a later rendering substep")]
 pub fn classify_trend(delta: f64, eps: f64) -> Trend {
     if delta.abs() < eps {
         Trend::Stable
@@ -377,7 +166,6 @@ pub fn classify_trend(delta: f64, eps: f64) -> Trend {
 ///
 /// Minutes and seconds are zero-padded to two digits; hours are unpadded.
 #[must_use]
-#[allow(dead_code, reason = "wired in a later rendering substep")]
 pub fn fmt_uptime(secs: u32) -> String {
     if secs >= 3600 {
         let h = secs / 3600;
@@ -442,7 +230,7 @@ impl Series {
 
     /// Returns `true` if no points are stored.
     #[must_use]
-    #[allow(dead_code, reason = "used only in test assertions")]
+    #[allow(dead_code, reason = "test-only assertion helper")]
     pub fn is_empty(&self) -> bool {
         self.points.is_empty()
     }
@@ -457,7 +245,7 @@ impl Series {
 
     /// `(first_t, last_t)` of the time axis; `None` if empty.
     #[must_use]
-    #[allow(dead_code, reason = "used only in test assertions")]
+    #[allow(dead_code, reason = "test-only assertion helper")]
     pub fn x_bounds(&self) -> Option<(f64, f64)> {
         Some((self.points.front()?.0, self.points.back()?.0))
     }
@@ -478,7 +266,6 @@ impl Series {
     ///
     /// Returns `None` if the series is empty. Drives the 60 s gust calculation.
     #[must_use]
-    #[allow(dead_code, reason = "wired in a later rendering substep")]
     pub fn window_max(&self, window_secs: f64) -> Option<f64> {
         let last_t = self.points.back()?.0;
         self.points
@@ -492,7 +279,6 @@ impl Series {
     ///
     /// Returns `None` if the series is empty. Drives the 10-min trend arrow.
     #[must_use]
-    #[allow(dead_code, reason = "wired in a later rendering substep")]
     pub fn trend_delta(&self, window_secs: f64) -> Option<f64> {
         let (last_t, latest_v) = *self.points.back()?;
         let oldest_v = self
@@ -560,261 +346,6 @@ mod tests {
     use super::*;
 
     type TestResult = result::Result<(), Box<dyn error::Error>>;
-
-    // --- fmt_* tests ---
-
-    #[test]
-    fn fmt_temp_some_renders_one_decimal_with_unit() -> TestResult {
-        // Given
-        let value = Some(23.5_f32);
-
-        // When
-        let result = fmt_temp(value);
-
-        // Then
-        assert_eq!(result, "23.5 °C");
-        Ok(())
-    }
-
-    #[test]
-    fn fmt_temp_none_renders_na() -> TestResult {
-        // Given / When
-        let result = fmt_temp(None);
-
-        // Then
-        assert_eq!(result, "N/A");
-        Ok(())
-    }
-
-    // --- compass_label / fmt_wind / fmt_rain tests ---
-
-    #[test]
-    fn compass_label_cardinal_points() -> TestResult {
-        // Given / When / Then — the four cardinals (0=N, 90=E, 180=S, 270=W)
-        assert_eq!(compass_label(0.0), "N");
-        assert_eq!(compass_label(90.0), "E");
-        assert_eq!(compass_label(180.0), "S");
-        assert_eq!(compass_label(270.0), "W");
-        Ok(())
-    }
-
-    #[test]
-    fn compass_label_intercardinal_and_wraparound() -> TestResult {
-        // Given / When / Then
-        assert_eq!(compass_label(45.0), "NE");
-        assert_eq!(compass_label(247.5), "WSW");
-        // 350° is within 10° of 360°≡0° → N
-        assert_eq!(compass_label(350.0), "N");
-        // Negative / out-of-range headings normalise
-        assert_eq!(compass_label(-90.0), "W");
-        assert_eq!(compass_label(450.0), "E");
-        Ok(())
-    }
-
-    #[test]
-    fn fmt_wind_combines_speed_and_direction() -> TestResult {
-        // Given / When / Then — both present
-        assert_eq!(fmt_wind(Some(3.5), Some(270.0)), "3.5 m/s, 270° (W)");
-        // Speed only
-        assert_eq!(fmt_wind(Some(3.5), None), "3.5 m/s");
-        // Direction only
-        assert_eq!(fmt_wind(None, Some(90.0)), "90° (E)");
-        // Neither
-        assert_eq!(fmt_wind(None, None), "N/A");
-        Ok(())
-    }
-
-    #[test]
-    fn fmt_rain_some_and_none() -> TestResult {
-        // Given / When / Then
-        assert_eq!(fmt_rain(Some(12.0)), "12.0 mm/h");
-        assert_eq!(fmt_rain(None), "N/A");
-        Ok(())
-    }
-
-    // --- fmt_diagnostics / diagnostics_alert tests ---
-
-    #[test]
-    fn fmt_diagnostics_none_renders_ok() -> TestResult {
-        // Given / When
-        let result = fmt_diagnostics(Diagnostics::empty());
-
-        // Then
-        assert_eq!(result, "OK");
-        Ok(())
-    }
-
-    #[test]
-    fn fmt_diagnostics_occlusion_only() -> TestResult {
-        // Given / When
-        let result = fmt_diagnostics(Diagnostics::empty().with_occlusion(true));
-
-        // Then
-        assert_eq!(result, "sky occluded");
-        Ok(())
-    }
-
-    #[test]
-    fn fmt_diagnostics_baro_fault_only() -> TestResult {
-        // Given / When
-        let result = fmt_diagnostics(Diagnostics::empty().with_baro_fault(true));
-
-        // Then
-        assert_eq!(result, "BMP388 fault");
-        Ok(())
-    }
-
-    #[test]
-    fn fmt_diagnostics_multiple_flags_joined() -> TestResult {
-        // Given — both occlusion and baro fault set
-        let diag = Diagnostics::empty()
-            .with_occlusion(true)
-            .with_baro_fault(true);
-
-        // When
-        let result = fmt_diagnostics(diag);
-
-        // Then — occlusion first, then baro fault, comma-separated
-        assert_eq!(result, "sky occluded, BMP388 fault");
-        Ok(())
-    }
-
-    #[test]
-    fn fmt_diagnostics_bme280_fault_only() -> TestResult {
-        // Given / When
-        let result = fmt_diagnostics(Diagnostics::empty().with_bme280_fault(true));
-
-        // Then
-        assert_eq!(result, "BME280 fault");
-        Ok(())
-    }
-
-    #[test]
-    fn fmt_diagnostics_veml7700_fault_only() -> TestResult {
-        // Given / When
-        let result = fmt_diagnostics(Diagnostics::empty().with_veml7700_fault(true));
-
-        // Then
-        assert_eq!(result, "VEML7700 fault");
-        Ok(())
-    }
-
-    #[test]
-    fn fmt_diagnostics_baro_divergence_only() -> TestResult {
-        // Given / When
-        let result = fmt_diagnostics(Diagnostics::empty().with_baro_divergence(true));
-
-        // Then
-        assert_eq!(result, "baro divergence");
-        Ok(())
-    }
-
-    #[test]
-    fn fmt_diagnostics_mlx_fault_only() -> TestResult {
-        // Given / When
-        let result = fmt_diagnostics(Diagnostics::empty().with_mlx90614_fault(true));
-
-        // Then
-        assert_eq!(result, "MLX90614 fault");
-        Ok(())
-    }
-
-    #[test]
-    fn fmt_diagnostics_all_flags_joined_in_bit_order() -> TestResult {
-        // Given — all eight flags set
-        let diag = Diagnostics::empty()
-            .with_occlusion(true)
-            .with_baro_fault(true)
-            .with_bme280_fault(true)
-            .with_veml7700_fault(true)
-            .with_baro_divergence(true)
-            .with_mlx90614_fault(true)
-            .with_ina_pv_fault(true)
-            .with_ina_batt_fault(true);
-
-        // When
-        let result = fmt_diagnostics(diag);
-
-        // Then — labels appear in bit order (0→7)
-        assert_eq!(
-            result,
-            "sky occluded, BMP388 fault, BME280 fault, VEML7700 fault, baro divergence, MLX90614 fault, INA PV fault, INA batt fault"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn fmt_diagnostics_ina_faults_individually() -> TestResult {
-        // Given / When / Then — bit 6 and bit 7 each render on their own
-        assert_eq!(
-            fmt_diagnostics(Diagnostics::empty().with_ina_pv_fault(true)),
-            "INA PV fault"
-        );
-        assert_eq!(
-            fmt_diagnostics(Diagnostics::empty().with_ina_batt_fault(true)),
-            "INA batt fault"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn fmt_solar_renders_voltage_current_power() -> TestResult {
-        // Given — 15.0 V, 600 mA → 9.0 W
-        let result = fmt_solar(Some(15_000), Some(600));
-
-        // Then
-        assert_eq!(result, "15.00 V, 600 mA (9.00 W)");
-
-        // Voltage only (no current): drops the current/power tail
-        assert_eq!(fmt_solar(Some(15_000), None), "15.00 V");
-        // No voltage: N/A
-        assert_eq!(fmt_solar(None, Some(600)), "N/A");
-        Ok(())
-    }
-
-    #[test]
-    fn fmt_battery_status_renders_voltage_and_percent() -> TestResult {
-        // Given / When / Then
-        assert_eq!(fmt_battery_status(Some(3_900), Some(50)), "3.90 V, 50 %");
-        assert_eq!(fmt_battery_status(Some(3_900), None), "3.90 V");
-        assert_eq!(fmt_battery_status(None, Some(50)), "50 %");
-        assert_eq!(fmt_battery_status(None, None), "N/A");
-        Ok(())
-    }
-
-    #[test]
-    fn fmt_load_renders_current_and_power() -> TestResult {
-        // Given — 120 mA at 3.9 V → 0.468 W
-        assert_eq!(fmt_load(Some(3_900), Some(120)), "120 mA (0.47 W)");
-        // No battery voltage: current only
-        assert_eq!(fmt_load(None, Some(120)), "120 mA");
-        // No current: N/A
-        assert_eq!(fmt_load(Some(3_900), None), "N/A");
-        Ok(())
-    }
-
-    #[test]
-    fn diagnostics_alert_true_when_any_flag() -> TestResult {
-        // Given / When / Then — no flags: false
-        assert!(!diagnostics_alert(Diagnostics::empty()));
-
-        // occlusion only: true
-        assert!(diagnostics_alert(Diagnostics::empty().with_occlusion(true)));
-
-        // baro fault only: true
-        assert!(diagnostics_alert(
-            Diagnostics::empty().with_baro_fault(true)
-        ));
-
-        // both flags: true
-        assert!(diagnostics_alert(
-            Diagnostics::empty()
-                .with_occlusion(true)
-                .with_baro_fault(true)
-        ));
-
-        Ok(())
-    }
 
     // --- Series tests ---
 
@@ -1005,15 +536,6 @@ mod tests {
 
         // Then
         assert_eq!(state, SignalState::Stale);
-        Ok(())
-    }
-
-    #[test]
-    fn signal_state_labels() -> TestResult {
-        // Given / When / Then
-        assert_eq!(SignalState::NoSignal.label(), "No signal");
-        assert_eq!(SignalState::Live.label(), "Live");
-        assert_eq!(SignalState::Stale.label(), "Stale");
         Ok(())
     }
 

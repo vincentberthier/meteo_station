@@ -1,5 +1,3 @@
-// consumed by the VENT card (substep 8)
-#![allow(dead_code, reason = "consumed by the VENT card (substep 8)")]
 //! Canvas compass widget for the VENT card centre.
 //!
 //! [`heading_to_xy`] is a pure geometry helper (unit-tested on the host).

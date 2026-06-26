@@ -18,7 +18,6 @@ pub const STALE_AFTER: Duration = Duration::from_secs(5);
 
 /// Fallback station name displayed in the header when the BLE advertisement
 /// carries no alias.
-#[allow(dead_code, reason = "wired in a later rendering substep")]
 pub const STATION_DEFAULT: &str = "MeteoStation";
 
 /// All render-time state for the TUI dashboard.
@@ -174,18 +173,6 @@ impl AppState {
     pub fn signal_state(&self, now: Instant) -> SignalState {
         SignalState::from_age(self.last_frame_at, now, STALE_AFTER)
     }
-
-    /// Returns `true` when no frame has arrived, or the last frame arrived more
-    /// than `max_age` ago.
-    ///
-    /// This is **cosmetic only** — it drives value greying in the UI and must
-    /// never be used to trigger a reconnect.
-    #[must_use]
-    #[allow(dead_code, reason = "old table-renderer helper pending cleanup")]
-    pub fn is_stale(&self, now: Instant, max_age: Duration) -> bool {
-        self.last_frame_at
-            .is_none_or(|t| now.duration_since(t) > max_age)
-    }
 }
 
 // grcov exclude start
@@ -258,66 +245,6 @@ mod tests {
         assert!(app.pressure.is_empty());
         assert!(app.lux.is_empty());
         assert_eq!(app.temp.points().len(), 1);
-
-        Ok(())
-    }
-
-    #[test]
-    fn is_stale_true_before_first_frame() -> TestResult {
-        // Given
-        let base = Instant::now();
-        let app = AppState::new(base);
-
-        // When / Then
-        assert!(app.is_stale(base, STALE_AFTER));
-
-        Ok(())
-    }
-
-    #[test]
-    #[allow(
-        clippy::arithmetic_side_effects,
-        reason = "test: Instant + Duration cannot overflow in practice"
-    )]
-    fn is_stale_false_within_window() -> TestResult {
-        // Given
-        let base = Instant::now();
-        let mut app = AppState::new(base);
-        let t = Telemetry {
-            temperature_c: Some(20.0),
-            uptime_s: 1,
-            ..Telemetry::empty()
-        };
-
-        // When
-        app.apply(BleEvent::Frame(FrameEvent::new(t)), base);
-
-        // Then — 1 s after the frame, still within STALE_AFTER (5 s)
-        assert!(!app.is_stale(base + Duration::from_secs(1), STALE_AFTER));
-
-        Ok(())
-    }
-
-    #[test]
-    #[allow(
-        clippy::arithmetic_side_effects,
-        reason = "test: Instant + Duration cannot overflow in practice"
-    )]
-    fn is_stale_true_after_window() -> TestResult {
-        // Given
-        let base = Instant::now();
-        let mut app = AppState::new(base);
-        let t = Telemetry {
-            temperature_c: Some(20.0),
-            uptime_s: 1,
-            ..Telemetry::empty()
-        };
-
-        // When
-        app.apply(BleEvent::Frame(FrameEvent::new(t)), base);
-
-        // Then — STALE_AFTER + 1 s after the frame → stale
-        assert!(app.is_stale(base + STALE_AFTER + Duration::from_secs(1), STALE_AFTER));
 
         Ok(())
     }

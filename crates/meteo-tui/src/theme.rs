@@ -1,5 +1,3 @@
-// consumed by later TUI revamp substeps
-#![allow(dead_code, reason = "consumed by later TUI revamp substeps")]
 //! Catppuccin Mocha colour palette and threshold→colour helpers for the dashboard.
 
 use ratatui::style::Color;

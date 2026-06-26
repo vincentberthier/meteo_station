@@ -37,10 +37,8 @@ pub struct FrameEvent {
     /// Decoded telemetry frame.
     pub telemetry: Telemetry,
     /// RSSI of the advertisement, if the adapter reported it.
-    #[allow(dead_code, reason = "consumed by the app reducer in the next substep")]
     pub rssi: Option<i16>,
     /// Alias (advertised name) of the station, if available.
-    #[allow(dead_code, reason = "consumed by the app reducer in the next substep")]
     pub station: Option<String>,
 }
 
@@ -49,10 +47,7 @@ impl FrameEvent {
     ///
     /// Useful in tests and wherever only the decoded telemetry is available.
     #[must_use]
-    #[allow(
-        dead_code,
-        reason = "called from test helpers; unused in the binary until next substep"
-    )]
+    #[allow(dead_code, reason = "test-only assertion helper")]
     pub const fn new(telemetry: Telemetry) -> Self {
         Self {
             telemetry,

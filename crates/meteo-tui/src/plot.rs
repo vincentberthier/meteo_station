@@ -1,5 +1,3 @@
-// consumed by the history grid (substep 10)
-#![allow(dead_code, reason = "module is wired in by a later substep")]
 //! Canvas-based history plot primitive for the `MeteoStation` TUI dashboard.
 //!
 //! [`render_plot`] draws one bordered panel containing a Braille-resolution Canvas
