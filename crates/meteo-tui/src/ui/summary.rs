@@ -2,8 +2,8 @@
 //!
 //! [`render_summary`] splits the given area into three equal columns and
 //! renders each card in its column. The ATMOSPHÈRE card shows atmospheric
-//! sensor readings; the VENT card delegates to the compass widget; the
-//! ÉNERGIE card shows solar, battery, and load data.
+//! sensor readings; the VENT card shows an image compass dial with a TUI
+//! readout strip; the ÉNERGIE card shows solar, battery, and load data.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -12,20 +12,19 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Gauge, Paragraph};
 
 use crate::app::AppState;
-use crate::compass::{CompassData, render_compass};
+use crate::image_render::Images;
 use crate::model;
 use crate::theme;
-
-use super::Options;
 
 /// Render the three-card summary band (ATMOSPHÈRE · VENT · ÉNERGIE).
 ///
 /// `app` is `&mut` because the VENT card calls [`crate::model::Series::points`]
-/// (which calls `make_contiguous` internally) on the gust and heading series.
-pub fn render_summary(frame: &mut Frame, area: Rect, app: &mut AppState, options: Options) {
+/// (which calls `make_contiguous` internally) on the gust series.
+/// `images` is passed through for the image compass widget in the VENT card.
+pub fn render_summary(frame: &mut Frame, area: Rect, app: &mut AppState, images: &mut Images) {
     let [atmo, vent, ener] = Layout::horizontal([Constraint::Ratio(1, 3); 3]).areas(area);
     render_atmosphere(frame, atmo, app);
-    render_vent(frame, vent, app, options);
+    render_vent(frame, vent, app, images);
     render_energie(frame, ener, app);
 }
 
@@ -162,8 +161,12 @@ fn render_atmosphere(frame: &mut Frame, area: Rect, app: &AppState) {
 
 // ── VENT ──────────────────────────────────────────────────────────────────────
 
-/// Render the VENT card by delegating to the compass widget.
-fn render_vent(frame: &mut Frame, area: Rect, app: &mut AppState, options: Options) {
+/// Render the VENT card: image compass dial (top) + wind readout strip (bottom).
+///
+/// The heading trail from `app.heading` is not shown here; the image compass
+/// does not support it. The `gust_trail` CLI option is parsed but no longer
+/// affects compass rendering (the image protocol replaced the canvas trail).
+fn render_vent(frame: &mut Frame, area: Rect, app: &mut AppState, images: &mut Images) {
     let block = Block::bordered()
         .border_style(Style::new().fg(theme::BORDER))
         .style(Style::new().bg(theme::MANTLE))
@@ -174,26 +177,46 @@ fn render_vent(frame: &mut Frame, area: Rect, app: &mut AppState, options: Optio
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let speed_ms = app.latest.wind_speed_ms.map(f64::from);
     let heading_deg = app.latest.wind_dir_deg.map(f64::from);
+    let speed = app.latest.wind_speed_ms.map(f64::from);
+    let calm = speed.is_none_or(|s| s < 0.3);
 
     // Consume the gust series point; borrow is released after .copied().map().
     let gust_ms = app.gust.points().last().copied().map(|(_, v)| v);
 
-    // Borrow the heading trail; lasts until CompassData is dropped.
-    let heading_pts = app.heading.points();
-    let now_secs = heading_pts.last().map_or(0.0, |&(t, _)| t);
+    // Split inner: image dial on top, 1-row readout strip at the bottom.
+    let [dial_area, readout_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
 
-    let data = CompassData {
-        speed_ms,
-        heading_deg,
-        gust_ms,
-        trail: heading_pts,
-        now_secs,
-        show_trail: options.gust_trail,
+    images.draw_compass(frame, dial_area, heading_deg, calm);
+
+    // ── Wind readout (TUI text, rendered after the image so it overlays) ─────
+    let readout_line = if calm {
+        Line::from(Span::styled("calme", Style::new().fg(theme::SKY)))
+    } else {
+        let speed_str = speed.map_or_else(|| "N/A".to_owned(), |s| format!("{s:.1}"));
+        let (heading_str, label_str) = heading_deg.map_or_else(
+            || ("N/A".to_owned(), ""),
+            |h| {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "heading truncated to f32 for compass label lookup; display precision loss is acceptable"
+                )]
+                let label = model::compass_label_fr(h as f32);
+                (format!("{h:.0}"), label)
+            },
+        );
+        let gust_str = gust_ms.map_or(String::new(), |g| format!(" rafale {g:.1}"));
+        Line::from(vec![
+            Span::styled(speed_str, Style::new().fg(theme::SKY)),
+            Span::styled(
+                format!(" m/s \u{00b7} {heading_str}\u{00b0} {label_str}"),
+                Style::new().fg(theme::SUBTEXT0),
+            ),
+            Span::styled(gust_str, Style::new().fg(theme::TEAL)),
+        ])
     };
-
-    render_compass(frame, inner, &data);
+    frame.render_widget(Paragraph::new(readout_line), readout_area);
 }
 
 // ── ÉNERGIE ───────────────────────────────────────────────────────────────────
@@ -399,7 +422,7 @@ mod tests {
     use super::*;
     use crate::app::AppState;
     use crate::ble::{BleEvent, FrameEvent};
-    use crate::ui::Options;
+    use crate::image_render::Images;
 
     type TestResult = result::Result<(), Box<dyn error::Error>>;
 
@@ -410,6 +433,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend)?;
         let now = Instant::now();
         let mut app = AppState::new(now);
+        let mut images = Images::for_test();
         let t = meteo_lib::Telemetry {
             temperature_c: Some(22.5),
             humidity_pct: Some(65.0),
@@ -426,7 +450,7 @@ mod tests {
 
         // When
         terminal.draw(|f| {
-            render_summary(f, f.area(), &mut app, Options::default_for_test());
+            render_summary(f, f.area(), &mut app, &mut images);
         })?;
 
         // Then — all three card titles and dew-point label must appear in the buffer
@@ -464,10 +488,11 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend)?;
         let now = Instant::now();
         let mut app = AppState::new(now);
+        let mut images = Images::for_test();
 
         // When
         terminal.draw(|f| {
-            render_summary(f, f.area(), &mut app, Options::default_for_test());
+            render_summary(f, f.area(), &mut app, &mut images);
         })?;
 
         // Then — card title present, N/A placeholders rendered (exercises None paths)

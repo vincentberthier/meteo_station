@@ -14,6 +14,7 @@ use ratatui::style::Style;
 use ratatui::widgets::Block;
 
 use crate::app::AppState;
+use crate::image_render::Images;
 use crate::plot;
 use crate::theme;
 
@@ -25,6 +26,14 @@ pub struct Options {
     /// Draw faint gridlines at 25 / 50 / 75 % in history charts.
     pub show_grid: bool,
     /// Show the 60-second heading trail in the wind compass.
+    ///
+    /// Parsed from the `--gust-trail` CLI flag and retained for API stability,
+    /// but no longer affects compass rendering: the image compass replaced the
+    /// canvas trail and does not currently render a heading history.
+    #[expect(
+        dead_code,
+        reason = "parsed from --gust-trail CLI flag; retained for API stability — the image compass does not currently render a heading trail"
+    )]
     pub gust_trail: bool,
     /// Draw the gradient area fill under history traces. Off by default: in a
     /// monochrome braille terminal the fill turns spiky signals into an
@@ -49,7 +58,16 @@ impl Options {
 
 /// Draw the full dashboard. `pulse` ∈ [0,1] is the « En direct » dot intensity
 /// (computed from wall-clock elapsed in main.rs).
-pub fn render(frame: &mut Frame, app: &mut AppState, now: Instant, options: Options, pulse: f64) {
+/// `images` carries the image-protocol caches for charts and the compass widget;
+/// rebuilds are gated on data version inside [`Images`] so unchanged redraws are cheap.
+pub fn render(
+    frame: &mut Frame,
+    app: &mut AppState,
+    now: Instant,
+    options: Options,
+    pulse: f64,
+    images: &mut Images,
+) {
     frame.render_widget(
         Block::default().style(Style::new().bg(theme::BASE)),
         frame.area(),
@@ -62,9 +80,9 @@ pub fn render(frame: &mut Frame, app: &mut AppState, now: Instant, options: Opti
     ])
     .areas(frame.area());
     header::render_header(frame, header_a, app, now, pulse);
-    summary::render_summary(frame, summary_a, app, options);
+    summary::render_summary(frame, summary_a, app, images);
     diagnostics::render_diagnostics(frame, diag_a, app, now);
-    history::render_history(frame, history_a, app, options);
+    history::render_history(frame, history_a, app, options, images);
 }
 
 // grcov exclude start
@@ -81,6 +99,7 @@ mod tests {
 
     use super::*;
     use crate::ble::{BleEvent, FrameEvent};
+    use crate::image_render::Images;
 
     type TestResult = result::Result<(), Box<dyn error::Error>>;
 
@@ -92,6 +111,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend)?;
         let now = Instant::now();
         let mut app = AppState::new(now);
+        let mut images = Images::for_test();
         let t = meteo_lib::Telemetry {
             temperature_c: Some(22.5),
             sky_temp_c: Some(-12.0),
@@ -102,7 +122,16 @@ mod tests {
         app.apply(BleEvent::Frame(FrameEvent::new(t)), now);
 
         // When
-        terminal.draw(|f| render(f, &mut app, now, Options::default_for_test(), 1.0))?;
+        terminal.draw(|f| {
+            render(
+                f,
+                &mut app,
+                now,
+                Options::default_for_test(),
+                1.0,
+                &mut images,
+            );
+        })?;
 
         // Then — buffer must contain the French UI labels from each tier.
         let buffer_text: String = terminal
@@ -135,6 +164,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend)?;
         let now = Instant::now();
         let mut app = AppState::new(now);
+        let mut images = Images::for_test();
         let t = meteo_lib::Telemetry {
             diagnostics: meteo_lib::Diagnostics::empty().with_baro_fault(true),
             uptime_s: 1,
@@ -143,7 +173,16 @@ mod tests {
         app.apply(BleEvent::Frame(FrameEvent::new(t)), now);
 
         // When
-        terminal.draw(|f| render(f, &mut app, now, Options::default_for_test(), 1.0))?;
+        terminal.draw(|f| {
+            render(
+                f,
+                &mut app,
+                now,
+                Options::default_for_test(),
+                1.0,
+                &mut images,
+            );
+        })?;
 
         // Then — the diagnostics chip for BMP388 must appear in the buffer.
         let buffer_text: String = terminal
@@ -168,9 +207,19 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend)?;
         let now = Instant::now();
         let mut app = AppState::new(now);
+        let mut images = Images::for_test();
 
         // When / Then — must not panic, must return Ok
-        terminal.draw(|f| render(f, &mut app, now, Options::default_for_test(), 1.0))?;
+        terminal.draw(|f| {
+            render(
+                f,
+                &mut app,
+                now,
+                Options::default_for_test(),
+                1.0,
+                &mut images,
+            );
+        })?;
 
         Ok(())
     }

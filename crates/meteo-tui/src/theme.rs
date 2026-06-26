@@ -12,10 +12,6 @@ pub const CRUST: Color = Color::Rgb(0x11, 0x11, 0x1b);
 pub const BORDER: Color = Color::Rgb(0x2a, 0x2a, 0x3c);
 /// Chip frame / separators.
 pub const SURFACE0: Color = Color::Rgb(0x31, 0x32, 0x44);
-/// Internal dotted rules.
-pub const HAIRLINE: Color = Color::Rgb(0x26, 0x26, 0x3a);
-/// Minor compass ticks.
-pub const SURFACE1: Color = Color::Rgb(0x45, 0x47, 0x5a);
 /// X-axis / faint strokes.
 pub const SURFACE2: Color = Color::Rgb(0x58, 0x5b, 0x70);
 /// Values / clock.
@@ -50,8 +46,6 @@ pub const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
 pub const MAUVE: Color = Color::Rgb(0xcb, 0xa6, 0xf7);
 /// Fault / North marker.
 pub const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
-/// Compass needle tail.
-pub const NEEDLE_TAIL: Color = Color::Rgb(0x3d, 0x4d, 0x5e);
 
 /// Battery state-of-charge → gauge/percent colour.
 ///

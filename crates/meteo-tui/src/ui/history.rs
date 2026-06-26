@@ -1,31 +1,111 @@
 //! History grids — two bordered blocks (CAPTEURS and ÉNERGIE), each containing
-//! a grid of [`crate::plot::render_plot`] panels.
+//! a grid of image-rendered chart panels.
 //!
 //! [`render_history`] splits the given area into a 2/3-tall CAPTEURS block (6
 //! plots in a 2 × 3 grid) and a 1/3-tall ÉNERGIE block (3 plots in a 1 × 3
-//! row).  Every cell delegates to [`crate::plot::render_plot`].
+//! row).  Every cell delegates to [`draw_chart_panel`] which drives
+//! [`crate::image_render::Images::draw_chart`].
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::Span;
-use ratatui::widgets::Block;
+use ratatui::widgets::{Block, Paragraph};
 
 use crate::app::AppState;
+use crate::image_render;
+use crate::model::{self, Series};
 use crate::plot;
 use crate::theme;
 
 use super::Options;
 
+/// Draw one chart panel: block frame + image chart + axis-label overlays.
+///
+/// `spec` carries the panel configuration (title, unit, color, etc.).
+/// `series` is `&mut` because [`Series::points`] calls `make_contiguous`.
+/// `version` is `app.frame_count` so the cached image is rebuilt only when
+/// new data arrives; `id` is a unique `&'static str` key per panel.
+fn draw_chart_panel(
+    frame: &mut Frame,
+    images: &mut image_render::Images,
+    area: Rect,
+    spec: &plot::PlotSpec<'_>,
+    series: &mut Series,
+    id: &'static str,
+    version: u64,
+) {
+    let block = plot::make_block(spec);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let Some(x_win) = series.x_window() else {
+        frame.render_widget(Paragraph::new("en attente\u{2026}"), inner);
+        return;
+    };
+    let yb = series.y_bounds().unwrap_or((-1.0, 1.0));
+    let y_win = model::padded_value_bounds(yb.0, yb.1, spec.floor);
+
+    // Reserve a 1-row bottom strip for x-axis labels; image fills the rest.
+    let [plot_a, xaxis_a] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+
+    // Image rebuilds are gated on `version` (= frame_count) inside Images; unchanged
+    // data redraws are cheap because the cached StatefulProtocol is reused.
+    images.draw_chart(frame, plot_a, id, version, |w, h| {
+        image_render::render_chart_image(spec, series.points(), x_win, y_win, w, h)
+    });
+
+    // ── Y-axis label overlays (rendered on top of the image) ────────────────
+    let y_win_scaled = [y_win[0] * spec.scale, y_win[1] * spec.scale];
+    let [ymin_str, _ymid, ymax_str] = model::value_axis_labels(y_win_scaled, spec.prec);
+
+    let ov1 = Style::new().fg(theme::OVERLAY1);
+
+    // Y-max at the top-left of plot_a (1-row tall).
+    let ymax_area = Rect {
+        height: plot_a.height.min(1),
+        ..plot_a
+    };
+    frame.render_widget(Paragraph::new(Span::styled(ymax_str, ov1)), ymax_area);
+    // Y-min at the bottom-left of plot_a (1-row tall).
+    let ymin_y = plot_a.bottom().saturating_sub(1);
+    let ymin_area = Rect {
+        y: ymin_y,
+        height: plot_a.height.min(1),
+        ..plot_a
+    };
+    frame.render_widget(Paragraph::new(Span::styled(ymin_str, ov1)), ymin_area);
+
+    // ── X-axis labels in the bottom strip ────────────────────────────────────
+    let [xl, xm, xr] = Layout::horizontal([Constraint::Fill(1); 3]).areas(xaxis_a);
+    let surf2 = Style::new().fg(theme::SURFACE2);
+    frame.render_widget(Paragraph::new(Span::styled("-10m", surf2)), xl);
+    frame.render_widget(Paragraph::new(Span::styled("-5m", surf2)).centered(), xm);
+    frame.render_widget(
+        Paragraph::new(Span::styled("maint.", surf2)).right_aligned(),
+        xr,
+    );
+}
+
 /// Render the CAPTEURS (6 plots) and ÉNERGIE (3 plots) history grids into `area`.
 ///
-/// `app` is `&mut` because [`crate::model::Series::points`] calls
-/// `make_contiguous` on the internal deque.
+/// `app` is `&mut` because [`Series::points`] calls `make_contiguous`.
+/// `images` carries the cached image protocols; each plot is re-rasterized only
+/// when `app.frame_count` changes or the panel area resizes.
 #[expect(
     clippy::too_many_lines,
-    reason = "the function is a flat grid of plot calls; splitting would scatter the cohesive layout"
+    reason = "the function is a flat grid of panel calls; splitting would scatter the cohesive layout"
 )]
-pub fn render_history(frame: &mut Frame, area: Rect, app: &mut AppState, options: Options) {
+pub fn render_history(
+    frame: &mut Frame,
+    area: Rect,
+    app: &mut AppState,
+    options: Options,
+    images: &mut image_render::Images,
+) {
+    let version = app.frame_count;
+
     let [capteurs, energie] =
         Layout::vertical([Constraint::Ratio(2, 3), Constraint::Ratio(1, 3)]).areas(area);
 
@@ -42,8 +122,9 @@ pub fn render_history(frame: &mut Frame, area: Rect, app: &mut AppState, options
 
     // ── Row 1: Température air / Température ciel / Luminosité ────────────────
 
-    plot::render_plot(
+    draw_chart_panel(
         frame,
+        images,
         temp_a,
         &plot::PlotSpec {
             title: "Temp\u{e9}rature air",
@@ -59,10 +140,13 @@ pub fn render_history(frame: &mut Frame, area: Rect, app: &mut AppState, options
             bars: None,
         },
         &mut app.temp,
+        "temp",
+        version,
     );
 
-    plot::render_plot(
+    draw_chart_panel(
         frame,
+        images,
         sky_a,
         &plot::PlotSpec {
             title: "Temp\u{e9}rature ciel",
@@ -78,11 +162,14 @@ pub fn render_history(frame: &mut Frame, area: Rect, app: &mut AppState, options
             bars: None,
         },
         &mut app.sky,
+        "sky",
+        version,
     );
 
     // scale = 0.001: raw lux stored in app.lux; y-axis labels read klx.
-    plot::render_plot(
+    draw_chart_panel(
         frame,
+        images,
         lux_a,
         &plot::PlotSpec {
             title: "Luminosit\u{e9}",
@@ -98,12 +185,15 @@ pub fn render_history(frame: &mut Frame, area: Rect, app: &mut AppState, options
             bars: None,
         },
         &mut app.lux,
+        "lux",
+        version,
     );
 
     // ── Row 2: Pression / Vitesse du vent (+ gust overlay) / Humidité (+ rain bars)
 
-    plot::render_plot(
+    draw_chart_panel(
         frame,
+        images,
         press_a,
         &plot::PlotSpec {
             title: "Pression",
@@ -119,57 +209,66 @@ pub fn render_history(frame: &mut Frame, area: Rect, app: &mut AppState, options
             bars: None,
         },
         &mut app.pressure,
+        "press",
+        version,
     );
 
-    // Extract gust points into a local Vec before the render_plot call so the
-    // mutable borrow of app.gust (via points()) is released before the
-    // immutable-borrow of the slice is used alongside &mut app.wind.
+    // Extract gust points before borrowing app.wind so the mutable borrow of
+    // app.gust (via points()) is released before &mut app.wind is taken.
     let gust_pts: Vec<(f64, f64)> = app.gust.points().to_vec();
-    plot::render_plot(
+    let wind_spec = plot::PlotSpec {
+        title: "Vitesse du vent",
+        unit: "m/s",
+        color: theme::SKY,
+        prec: 1,
+        floor: Some(0.0),
+        scale: 1.0,
+        marker: options.marker_style,
+        show_grid: options.show_grid,
+        fill: options.fill,
+        overlay: Some(plot::Overlay {
+            points: &gust_pts,
+            color: theme::TEAL,
+            alpha: 0.32,
+        }),
+        bars: None,
+    };
+    draw_chart_panel(
         frame,
+        images,
         wind_a,
-        &plot::PlotSpec {
-            title: "Vitesse du vent",
-            unit: "m/s",
-            color: theme::SKY,
-            prec: 1,
-            floor: Some(0.0),
-            scale: 1.0,
-            marker: options.marker_style,
-            show_grid: options.show_grid,
-            fill: options.fill,
-            overlay: Some(plot::Overlay {
-                points: &gust_pts,
-                color: theme::TEAL,
-                alpha: 0.32,
-            }),
-            bars: None,
-        },
+        &wind_spec,
         &mut app.wind,
+        "wind",
+        version,
     );
 
     // Extract rain points for the same reason (bars borrow vs &mut app.humidity).
     let rain_pts: Vec<(f64, f64)> = app.rain.points().to_vec();
-    plot::render_plot(
+    let hum_spec = plot::PlotSpec {
+        title: "Humidit\u{e9} / Pluie",
+        unit: "%HR",
+        color: theme::SAPPHIRE,
+        prec: 0,
+        floor: Some(0.0),
+        scale: 1.0,
+        marker: options.marker_style,
+        show_grid: options.show_grid,
+        fill: options.fill,
+        overlay: None,
+        bars: Some(plot::Bars {
+            points: &rain_pts,
+            color: theme::BLUE,
+        }),
+    };
+    draw_chart_panel(
         frame,
+        images,
         hum_a,
-        &plot::PlotSpec {
-            title: "Humidit\u{e9} / Pluie",
-            unit: "%HR",
-            color: theme::SAPPHIRE,
-            prec: 0,
-            floor: Some(0.0),
-            scale: 1.0,
-            marker: options.marker_style,
-            show_grid: options.show_grid,
-            fill: options.fill,
-            overlay: None,
-            bars: Some(plot::Bars {
-                points: &rain_pts,
-                color: theme::BLUE,
-            }),
-        },
+        &hum_spec,
         &mut app.humidity,
+        "hum",
+        version,
     );
 
     // ── ÉNERGIE block ──────────────────────────────────────────────────────────
@@ -185,8 +284,9 @@ pub fn render_history(frame: &mut Frame, area: Rect, app: &mut AppState, options
     let [batt_a, solar_a, load_a] =
         Layout::horizontal([Constraint::Ratio(1, 3); 3]).areas(ener_inner);
 
-    plot::render_plot(
+    draw_chart_panel(
         frame,
+        images,
         batt_a,
         &plot::PlotSpec {
             title: "Batterie",
@@ -202,10 +302,13 @@ pub fn render_history(frame: &mut Frame, area: Rect, app: &mut AppState, options
             bars: None,
         },
         &mut app.batt_v,
+        "batt",
+        version,
     );
 
-    plot::render_plot(
+    draw_chart_panel(
         frame,
+        images,
         solar_a,
         &plot::PlotSpec {
             title: "Puissance solaire",
@@ -221,10 +324,13 @@ pub fn render_history(frame: &mut Frame, area: Rect, app: &mut AppState, options
             bars: None,
         },
         &mut app.solar_w,
+        "solar",
+        version,
     );
 
-    plot::render_plot(
+    draw_chart_panel(
         frame,
+        images,
         load_a,
         &plot::PlotSpec {
             title: "Puissance charge",
@@ -240,6 +346,8 @@ pub fn render_history(frame: &mut Frame, area: Rect, app: &mut AppState, options
             bars: None,
         },
         &mut app.load_w,
+        "load",
+        version,
     );
 }
 
@@ -259,6 +367,7 @@ mod tests {
     use super::*;
     use crate::app::AppState;
     use crate::ble::{BleEvent, FrameEvent};
+    use crate::image_render::Images;
     use crate::ui::Options;
 
     type TestResult = result::Result<(), Box<dyn error::Error>>;
@@ -270,6 +379,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend)?;
         let now = Instant::now();
         let mut app = AppState::new(now);
+        let mut images = Images::for_test();
 
         for uptime_s in [1_u32, 2, 3, 4, 5] {
             let t = meteo_lib::Telemetry {
@@ -292,7 +402,15 @@ mod tests {
         }
 
         // When
-        terminal.draw(|f| render_history(f, f.area(), &mut app, Options::default_for_test()))?;
+        terminal.draw(|f| {
+            render_history(
+                f,
+                f.area(),
+                &mut app,
+                Options::default_for_test(),
+                &mut images,
+            );
+        })?;
 
         // Then — buffer must contain key labels from both grids
         let buf: String = terminal

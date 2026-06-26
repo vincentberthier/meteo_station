@@ -8,7 +8,6 @@
 
 mod app;
 mod ble;
-mod compass;
 mod image_render;
 mod model;
 mod plot;
@@ -54,6 +53,8 @@ struct Cli {
     show_grid: bool,
 
     /// Show the 60-second heading trail in the wind compass.
+    /// Parsed but no longer affects rendering; the image compass replaced the
+    /// canvas trail and does not currently render a heading history.
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     gust_trail: bool,
 
@@ -74,10 +75,16 @@ async fn main() -> anyhow::Result<()> {
         fill: cli.fill,
     };
 
+    // Query terminal graphics protocol capabilities BEFORE entering alternate
+    // screen — the query uses stdio which is unavailable inside alternate mode.
+    let picker = ratatui_image::picker::Picker::from_query_stdio()
+        .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks());
+    let mut images = image_render::Images::new(picker);
+
     // ratatui::init() enables raw mode + alternate screen AND installs a panic
     // hook that restores the terminal on panic. ratatui::restore() undoes it.
     let mut terminal: ratatui::DefaultTerminal = ratatui::init();
-    let res = run_app(&mut terminal, addr, options).await;
+    let res = run_app(&mut terminal, addr, options, &mut images).await;
     ratatui::restore();
     res
 }
@@ -86,6 +93,9 @@ async fn run_app(
     terminal: &mut ratatui::DefaultTerminal,
     addr: bluer::Address,
     options: ui::Options,
+    // Image-protocol caches (charts + compass); image rebuilds are gated on data
+    // version inside Images so unchanged-data redraws at 10 Hz are cheap.
+    images: &mut image_render::Images,
 ) -> anyhow::Result<()> {
     use futures::StreamExt as _;
 
@@ -112,7 +122,14 @@ async fn run_app(
         }
         let pulse = pulse_intensity(started.elapsed());
         terminal.draw(|f| {
-            crate::ui::render(f, &mut app, std::time::Instant::now(), options, pulse);
+            crate::ui::render(
+                f,
+                &mut app,
+                std::time::Instant::now(),
+                options,
+                pulse,
+                images,
+            );
         })?;
     }
     Ok(())
