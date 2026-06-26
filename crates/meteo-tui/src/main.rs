@@ -37,6 +37,34 @@ impl From<MarkerArg> for plot::MarkerStyle {
     }
 }
 
+/// History-chart smoothing strength. Maps to a Gaussian kernel width (σ, in
+/// samples) applied to each trace's main line before rasterizing; the gust
+/// envelope and rain bars are never smoothed.
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+enum SmoothingArg {
+    /// No smoothing — raw 1 Hz samples.
+    Off,
+    /// σ ≈ 2 samples — just takes the jitter off.
+    Subtle,
+    /// σ ≈ 3.5 samples — clearly smoother, real features still read (default).
+    #[default]
+    Medium,
+    /// σ ≈ 7 samples — very smooth / trend-like.
+    Strong,
+}
+
+impl SmoothingArg {
+    /// Gaussian kernel width (σ, in samples). `0.0` disables smoothing.
+    const fn sigma(self) -> f64 {
+        match self {
+            Self::Off => 0.0,
+            Self::Subtle => 2.0,
+            Self::Medium => 3.5,
+            Self::Strong => 7.0,
+        }
+    }
+}
+
 /// Terminal image-protocol selection. `Auto` keeps `ratatui-image`'s terminal
 /// query (`Kitty` on `WezTerm`); the others force a specific protocol for
 /// terminals whose auto-detected protocol misbehaves (many simultaneous images).
@@ -85,6 +113,11 @@ struct Cli {
     /// halfblocks). Use when the auto-detected protocol fails to show charts.
     #[arg(long, value_enum, default_value_t = ProtocolArg::Auto)]
     image_protocol: ProtocolArg,
+
+    /// History-chart trace smoothing (off / subtle / medium / strong). A
+    /// centered Gaussian moving average; gust envelope and rain bars stay raw.
+    #[arg(long, value_enum, default_value_t = SmoothingArg::Medium)]
+    smoothing: SmoothingArg,
 }
 
 #[tokio::main]
@@ -96,6 +129,7 @@ async fn main() -> anyhow::Result<()> {
         show_grid: cli.show_grid,
         gust_trail: cli.gust_trail,
         fill: cli.fill,
+        smooth_sigma: cli.smoothing.sigma(),
     };
 
     // Query terminal graphics protocol capabilities BEFORE entering alternate

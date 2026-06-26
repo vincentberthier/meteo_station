@@ -26,6 +26,10 @@ use super::Options;
 /// `series` is `&mut` because [`Series::points`] calls `make_contiguous`.
 /// `version` is `app.frame_count` so the cached image is rebuilt only when
 /// new data arrives; `id` is a unique `&'static str` key per panel.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "panel renderer needs frame, images, area, spec, series, id, version, and the smoothing width"
+)]
 fn draw_chart_panel(
     frame: &mut Frame,
     images: &mut image_render::Images,
@@ -34,6 +38,7 @@ fn draw_chart_panel(
     series: &mut Series,
     id: &'static str,
     version: u64,
+    smooth_sigma: f64,
 ) {
     let block = plot::make_block(spec);
     let inner = block.inner(area);
@@ -53,9 +58,12 @@ fn draw_chart_panel(
         Layout::horizontal([Constraint::Length(7), Constraint::Min(0)]).areas(body_a);
 
     // The chart image fills `plot_a`. Rebuilds are gated on `version`
-    // (= frame_count) inside Images, so unchanged-data redraws are cheap.
+    // (= frame_count) inside Images, so the smoothing pass below runs only on a
+    // cache miss (new data / resize), not on every 10 Hz redraw. Only the main
+    // trace is smoothed; the gust overlay and rain bars in `spec` stay raw.
     images.draw_chart(frame, plot_a, id, version, |w, h| {
-        image_render::render_chart_image(spec, series.points(), x_win, y_win, w, h)
+        let smoothed = model::gaussian_smooth(series.points(), smooth_sigma);
+        image_render::render_chart_image(spec, &smoothed, x_win, y_win, w, h)
     });
 
     // ── Y-axis labels in the left gutter (top = max, bottom = min) ───────────
@@ -141,6 +149,7 @@ pub fn render_history(
         &mut app.temp,
         "temp",
         version,
+        options.smooth_sigma,
     );
 
     draw_chart_panel(
@@ -163,6 +172,7 @@ pub fn render_history(
         &mut app.sky,
         "sky",
         version,
+        options.smooth_sigma,
     );
 
     // scale = 0.001: raw lux stored in app.lux; y-axis labels read klx.
@@ -186,6 +196,7 @@ pub fn render_history(
         &mut app.lux,
         "lux",
         version,
+        options.smooth_sigma,
     );
 
     // ── Row 2: Pression / Vitesse du vent (+ gust overlay) / Humidité (+ rain bars)
@@ -211,6 +222,7 @@ pub fn render_history(
         &mut app.pressure,
         "press",
         version,
+        options.smooth_sigma,
     );
 
     // Extract gust points before borrowing app.wind so the mutable borrow of
@@ -243,6 +255,7 @@ pub fn render_history(
         &mut app.wind,
         "wind",
         version,
+        options.smooth_sigma,
     );
 
     // Extract rain points for the same reason (bars borrow vs &mut app.humidity).
@@ -271,6 +284,7 @@ pub fn render_history(
         &mut app.humidity,
         "hum",
         version,
+        options.smooth_sigma,
     );
 
     // ── ÉNERGIE block ──────────────────────────────────────────────────────────
@@ -306,6 +320,7 @@ pub fn render_history(
         &mut app.batt_v,
         "batt",
         version,
+        options.smooth_sigma,
     );
 
     draw_chart_panel(
@@ -328,6 +343,7 @@ pub fn render_history(
         &mut app.solar_w,
         "solar",
         version,
+        options.smooth_sigma,
     );
 
     draw_chart_panel(
@@ -350,6 +366,7 @@ pub fn render_history(
         &mut app.load_w,
         "load",
         version,
+        options.smooth_sigma,
     );
 }
 

@@ -318,6 +318,65 @@ pub fn padded_value_bounds(min: f64, max: f64, floor: Option<f64>) -> [f64; 2] {
     }
 }
 
+/// Centered Gaussian-weighted moving average over a `(t, value)` series.
+///
+/// Smooths only the `value` axis; each output point keeps its original timestamp.
+/// The kernel is **centered** (zero phase lag — a peak stays at the sample where
+/// it occurred, unlike a trailing average or EWMA which drag features later), and
+/// it operates over sample **indices** (the feed is a uniform ~1 Hz). At the two
+/// ends the kernel is truncated and its weights renormalized, so the first and
+/// last samples are not pulled toward the interior — the live right edge keeps
+/// tracking the latest reading instead of flattening.
+///
+/// `sigma` is the Gaussian width in samples; the kernel half-width is `⌈3·sigma⌉`
+/// (weights beyond that are negligible). `sigma <= 0`, a non-finite `sigma`, or
+/// fewer than three points returns the input unchanged.
+///
+/// Index-based weighting means a temporal gap (signal loss) is blended across as
+/// if the two sides were adjacent; gaps are rare and the rasterizer already draws
+/// a straight connector across them, so this is acceptable.
+#[must_use]
+pub fn gaussian_smooth(pts: &[(f64, f64)], sigma: f64) -> Vec<(f64, f64)> {
+    if !sigma.is_finite() || sigma <= 0.0 || pts.len() < 3 {
+        return pts.to_vec();
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "⌈3·sigma⌉ is a small positive finite value; usize holds it"
+    )]
+    let radius = (sigma * 3.0).ceil() as usize;
+
+    // Precompute kernel weights indexed by absolute sample distance d ∈ [0, radius].
+    let kernel: Vec<f64> = (0..=radius)
+        .map(|d| {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "d ≤ radius is a small integer, exact in f64"
+            )]
+            let x = d as f64 / sigma;
+            (-0.5 * x * x).exp()
+        })
+        .collect();
+
+    let n = pts.len();
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let lo = i.saturating_sub(radius);
+        let hi = i.saturating_add(radius).min(n.saturating_sub(1));
+        let mut acc = 0.0_f64;
+        let mut wsum = 0.0_f64;
+        for j in lo..=hi {
+            let w = kernel[j.abs_diff(i)];
+            acc = w.mul_add(pts[j].1, acc);
+            wsum += w;
+        }
+        let v = if wsum > 0.0 { acc / wsum } else { pts[i].1 };
+        out.push((pts[i].0, v));
+    }
+    out
+}
+
 /// Three evenly spaced tick labels for a value axis spanning `bounds` (`[lo, hi]`),
 /// each formatted to `prec` decimals (bottom, middle, top).
 #[must_use]
@@ -477,6 +536,105 @@ mod tests {
             "lo should keep its margin (95.0)"
         );
         assert!((hi - 205.0).abs() < f64::EPSILON, "hi should be 205.0");
+        Ok(())
+    }
+
+    // --- gaussian_smooth tests ---
+
+    #[test]
+    fn gaussian_smooth_identity_when_disabled() -> TestResult {
+        // Given — a varying series
+        let pts = [(0.0, 1.0), (1.0, 5.0), (2.0, 2.0), (3.0, 8.0)];
+
+        // When — sigma <= 0 disables smoothing
+        let off = gaussian_smooth(&pts, 0.0);
+        let neg = gaussian_smooth(&pts, -2.0);
+
+        // Then — input returned unchanged
+        assert_eq!(off, pts.to_vec(), "sigma=0 must be identity");
+        assert_eq!(neg, pts.to_vec(), "negative sigma must be identity");
+        Ok(())
+    }
+
+    #[test]
+    fn gaussian_smooth_too_few_points_unchanged() -> TestResult {
+        // Given — fewer than three points
+        let pts = [(0.0, 1.0), (1.0, 9.0)];
+
+        // When
+        let out = gaussian_smooth(&pts, 3.5);
+
+        // Then — returned unchanged (kernel needs neighbours to act)
+        assert_eq!(out, pts.to_vec());
+        Ok(())
+    }
+
+    #[test]
+    fn gaussian_smooth_preserves_len_and_timestamps() -> TestResult {
+        // Given
+        let pts: Vec<(f64, f64)> = (0..20).map(|i| (f64::from(i), f64::from(i % 3))).collect();
+
+        // When
+        let out = gaussian_smooth(&pts, 3.5);
+
+        // Then — same length, timestamps untouched (only values change)
+        assert_eq!(out.len(), pts.len());
+        for (o, p) in out.iter().zip(pts.iter()) {
+            assert!(
+                (o.0 - p.0).abs() < f64::EPSILON,
+                "timestamp must be preserved: {} vs {}",
+                o.0,
+                p.0
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn gaussian_smooth_attenuates_spike() -> TestResult {
+        // Given — a flat baseline with one tall spike in the middle
+        let mut pts: Vec<(f64, f64)> = (0..21).map(|i| (f64::from(i), 0.0)).collect();
+        pts[10].1 = 10.0;
+
+        // When
+        let out = gaussian_smooth(&pts, 3.5);
+
+        // Then — the spike sample is pulled down and its neighbours lifted
+        assert!(
+            out[10].1 < 10.0,
+            "spike should be attenuated, got {}",
+            out[10].1
+        );
+        assert!(
+            out[10].1 > 0.0,
+            "spike center should stay above baseline, got {}",
+            out[10].1
+        );
+        assert!(
+            out[9].1 > 0.0 && out[11].1 > 0.0,
+            "neighbours should be lifted by the spike: {} / {}",
+            out[9].1,
+            out[11].1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn gaussian_smooth_constant_is_unchanged() -> TestResult {
+        // Given — a flat series; the average of equal values is the same value
+        let pts: Vec<(f64, f64)> = (0..30).map(|i| (f64::from(i), 7.0)).collect();
+
+        // When
+        let out = gaussian_smooth(&pts, 4.0);
+
+        // Then — every smoothed value stays at the constant (within fp tolerance)
+        for o in &out {
+            assert!(
+                (o.1 - 7.0).abs() < 1e-9,
+                "constant series must stay constant, got {}",
+                o.1
+            );
+        }
         Ok(())
     }
 

@@ -39,6 +39,10 @@ pub struct Options {
     /// monochrome braille terminal the fill turns spiky signals into an
     /// unreadable column skyline, so it is opt-in (`--fill`) for the dossier look.
     pub fill: bool,
+    /// Gaussian smoothing width (in samples) applied to each history chart's
+    /// main trace before rasterizing. `0.0` disables smoothing. Overlays (the
+    /// gust envelope) and bar datasets (rain) are never smoothed.
+    pub smooth_sigma: f64,
 }
 
 impl Options {
@@ -52,6 +56,7 @@ impl Options {
             show_grid: true,
             gust_trail: true,
             fill: true,
+            smooth_sigma: 3.5,
         }
     }
 }
