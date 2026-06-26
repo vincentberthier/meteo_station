@@ -9,6 +9,7 @@
 mod app;
 mod ble;
 mod model;
+mod plot;
 mod theme;
 mod ui;
 
