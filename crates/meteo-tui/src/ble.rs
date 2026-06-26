@@ -60,7 +60,7 @@ pub async fn run(tx: mpsc::Sender<BleEvent>, addr: bluer::Address) -> anyhow::Re
         // own `SignalState` surfaces the gap (Live -> Stale) and the recovery
         // (Stale -> Live) once frames resume, so no separate logging is needed
         // (the TUI installs no runtime logger and owns the terminal).
-        let _ = scan_session(&session, &tx, addr).await;
+        drop(scan_session(&session, &tx, addr).await);
         // Re-check by retrying the real operation each iteration; the backoff
         // only prevents a tight spin while the adapter is unavailable.
         tokio::time::sleep(RESCAN_BACKOFF).await;

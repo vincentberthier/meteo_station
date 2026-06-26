@@ -9,6 +9,7 @@
 mod app;
 mod ble;
 mod model;
+mod theme;
 mod ui;
 
 use clap::Parser;
