@@ -2,6 +2,7 @@
 //! for a single frame.
 
 pub mod header;
+pub mod summary;
 
 use std::time::Instant;
 
@@ -15,6 +16,32 @@ use ratatui::widgets::{
 
 use crate::app::{AppState, STALE_AFTER};
 use crate::model::{self, Series, SignalState};
+use crate::plot;
+
+/// Rendering options shared across summary, history, and main render paths.
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code, reason = "wired into ui::render in substep 11")]
+pub struct Options {
+    /// Trace marker style for history charts.
+    pub marker_style: plot::MarkerStyle,
+    /// Draw faint gridlines at 25 / 50 / 75 % in history charts.
+    pub show_grid: bool,
+    /// Show the 60-second heading trail in the wind compass.
+    pub gust_trail: bool,
+}
+
+impl Options {
+    /// Dossier defaults (dots / grid on / trail on) — also the render smoke-test fixture.
+    #[must_use]
+    #[allow(dead_code, reason = "wired into ui::render in substep 11")]
+    pub const fn default_for_test() -> Self {
+        Self {
+            marker_style: plot::MarkerStyle::Dots,
+            show_grid: true,
+            gust_trail: true,
+        }
+    }
+}
 
 /// Draw the full dashboard for one frame.
 ///
