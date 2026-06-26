@@ -3,6 +3,7 @@
 
 pub mod diagnostics;
 pub mod header;
+pub mod history;
 pub mod summary;
 
 use std::time::Instant;
