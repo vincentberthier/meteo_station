@@ -266,7 +266,7 @@ mod tests {
     use test_log::test;
 
     use super::*;
-    use crate::ble::BleEvent;
+    use crate::ble::{BleEvent, FrameEvent};
 
     type TestResult = result::Result<(), Box<dyn error::Error>>;
 
@@ -285,7 +285,7 @@ mod tests {
             ..meteo_lib::Telemetry::empty()
         };
         // Feed a fresh frame so signal_state returns Live.
-        app.apply(BleEvent::Frame(t), now);
+        app.apply(BleEvent::Frame(FrameEvent::new(t)), now);
 
         // When
         terminal.draw(|f| render(f, &mut app, now))?;
@@ -345,7 +345,7 @@ mod tests {
             diagnostics: meteo_lib::Diagnostics::empty().with_baro_fault(true),
             ..meteo_lib::Telemetry::empty()
         };
-        app.apply(BleEvent::Frame(t), now);
+        app.apply(BleEvent::Frame(FrameEvent::new(t)), now);
 
         // When
         terminal.draw(|f| render(f, &mut app, now))?;

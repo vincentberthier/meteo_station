@@ -62,7 +62,8 @@ impl AppState {
     ///
     /// `now` is injected so tests can control the clock without real sleeps.
     pub fn apply(&mut self, ev: BleEvent, now: Instant) {
-        let BleEvent::Frame(t) = ev;
+        let BleEvent::Frame(fe) = ev;
+        let t = fe.telemetry;
         // Extract optional fields before moving `t` into `self.latest`.
         let temp_c = t.temperature_c;
         let sky_c = t.sky_temp_c;
@@ -126,6 +127,8 @@ mod tests {
 
     use test_log::test;
 
+    use crate::ble::FrameEvent;
+
     use super::*;
 
     type TestResult = result::Result<(), Box<dyn error::Error>>;
@@ -146,7 +149,7 @@ mod tests {
         };
 
         // When
-        app.apply(BleEvent::Frame(t), base);
+        app.apply(BleEvent::Frame(FrameEvent::new(t)), base);
 
         // Then
         assert_eq!(app.latest.temperature_c, Some(22.5));
@@ -174,7 +177,7 @@ mod tests {
         };
 
         // When
-        app.apply(BleEvent::Frame(t), base);
+        app.apply(BleEvent::Frame(FrameEvent::new(t)), base);
 
         // Then
         assert!(app.pressure.is_empty());
@@ -211,7 +214,7 @@ mod tests {
         };
 
         // When
-        app.apply(BleEvent::Frame(t), base);
+        app.apply(BleEvent::Frame(FrameEvent::new(t)), base);
 
         // Then — 1 s after the frame, still within STALE_AFTER (5 s)
         assert!(!app.is_stale(base + Duration::from_secs(1), STALE_AFTER));
@@ -234,7 +237,7 @@ mod tests {
         };
 
         // When
-        app.apply(BleEvent::Frame(t), base);
+        app.apply(BleEvent::Frame(FrameEvent::new(t)), base);
 
         // Then — STALE_AFTER + 1 s after the frame → stale
         assert!(app.is_stale(base + STALE_AFTER + Duration::from_secs(1), STALE_AFTER));
@@ -260,7 +263,7 @@ mod tests {
             temperature_c: Some(20.0),
             ..Telemetry::empty()
         };
-        app.apply(BleEvent::Frame(t), base);
+        app.apply(BleEvent::Frame(FrameEvent::new(t)), base);
 
         // Then — immediately → Live
         assert_eq!(app.signal_state(base), SignalState::Live);

@@ -31,11 +31,39 @@ pub fn decode_frame(mfg: &HashMap<u16, Vec<u8>>) -> Option<Telemetry> {
 
 // ── Public surface ────────────────────────────────────────────────────────────
 
+/// Data carried by a [`BleEvent::Frame`] event.
+#[derive(Debug, Clone)]
+pub struct FrameEvent {
+    /// Decoded telemetry frame.
+    pub telemetry: Telemetry,
+    /// RSSI of the advertisement, if the adapter reported it.
+    #[allow(dead_code, reason = "consumed by the app reducer in the next substep")]
+    pub rssi: Option<i16>,
+    /// Alias (advertised name) of the station, if available.
+    #[allow(dead_code, reason = "consumed by the app reducer in the next substep")]
+    pub station: Option<String>,
+}
+
+impl FrameEvent {
+    /// Construct a frame event with `rssi` and `station` defaulting to `None`.
+    ///
+    /// Useful in tests and wherever only the decoded telemetry is available.
+    #[must_use]
+    #[allow(dead_code, reason = "called from test helpers; unused in the binary until next substep")]
+    pub const fn new(telemetry: Telemetry) -> Self {
+        Self {
+            telemetry,
+            rssi: None,
+            station: None,
+        }
+    }
+}
+
 /// Events pushed to the app loop by the BLE task.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum BleEvent {
     /// A well-formed telemetry frame arrived via advertisement.
-    Frame(Telemetry),
+    Frame(FrameEvent),
 }
 
 /// Backoff between discovery (re)establishment attempts. Short enough that the
@@ -100,7 +128,7 @@ async fn scan_session(
                 continue;
             };
             if let Ok(Some(mfg)) = device.manufacturer_data().await {
-                emit_frame(tx, &mfg).await;
+                emit_frame(tx, &device, &mfg).await;
             }
         }
     }
@@ -111,10 +139,25 @@ async fn scan_session(
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 /// Try to decode a telemetry frame from `mfg` and send it on `tx`.
-async fn emit_frame(tx: &mpsc::Sender<BleEvent>, mfg: &HashMap<u16, Vec<u8>>) {
-    if let Some(t) = decode_frame(mfg) {
+///
+/// Reads RSSI and alias from `device` alongside the frame; transient D-Bus
+/// read failures degrade to `None` and never drop the frame.
+async fn emit_frame(
+    tx: &mpsc::Sender<BleEvent>,
+    device: &bluer::Device,
+    mfg: &HashMap<u16, Vec<u8>>,
+) {
+    if let Some(telemetry) = decode_frame(mfg) {
+        let rssi = device.rssi().await.ok().flatten();
+        let station = device.alias().await.ok().filter(|s| !s.is_empty());
         // Intentionally discard send error: the app may have shut down.
-        tx.send(BleEvent::Frame(t)).await.ok();
+        tx.send(BleEvent::Frame(FrameEvent {
+            telemetry,
+            rssi,
+            station,
+        }))
+        .await
+        .ok();
     }
 }
 
@@ -184,6 +227,24 @@ mod tests {
 
         // Then
         assert!(result.is_none(), "expected None for wrong-length payload");
+        Ok(())
+    }
+
+    #[test]
+    fn frame_event_new_defaults_none() -> TestResult {
+        // Given — a minimal Telemetry fixture with a distinct uptime_s
+        let t = Telemetry {
+            uptime_s: 42,
+            ..Telemetry::empty()
+        };
+
+        // When
+        let fe = FrameEvent::new(t);
+
+        // Then
+        assert!(fe.rssi.is_none(), "rssi should default to None");
+        assert!(fe.station.is_none(), "station should default to None");
+        assert_eq!(fe.telemetry.uptime_s, 42, "telemetry must be preserved");
         Ok(())
     }
 }
