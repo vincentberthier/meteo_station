@@ -17,12 +17,15 @@ Currently supports:
 
 > Ported from the STM32H753ZI (Nucleo-144). The on-chip BLE 5.3 radio replaces the
 > external RN4871 module (RN4871/USART path dropped). On-chip BLE telemetry is now
-> implemented: the firmware advertises as `MeteoStation`, exposes a GATT notify
-> characteristic, and pushes sensor data at 1 Hz, with an RWDT heartbeat supervisor.
-> The earlier supervision-timeout disconnects are fixed by negotiating an 8 s
-> supervision timeout over L2CAP (a vendored trouble-host patch — see the BLE
-> implementation notes). On-device acceptance via the gaia soak harness is a
-> pending manual gate.
+> implemented: the firmware advertises as `MeteoStation` using **extended connectable
+> non-scannable** advertising, embedding the 38-byte v5 telemetry frame as
+> Manufacturer-Specific Data (company `0xFFFF`) at 1 Hz — any observer reads it
+> without connecting. A coarse GPS location (~1 km) can be set over the connectable
+> channel by writing a PIN-gated GATT characteristic; the location is persisted to
+> NVS flash and broadcast in the frame. An RWDT heartbeat supervisor guards all
+> critical tasks. The supervision-timeout fix (vendored trouble-host patch) is retained
+> for the location-config connection. On-device acceptance via the gaia soak harness
+> is a pending manual gate.
 
 ## Build Commands
 
@@ -110,8 +113,12 @@ crates/
 │       ├── bus.rs         # Shared I2C0 async-mutex bus; per-sensor I2cDevice handles
 │       ├── aggregator.rs  # Aggregator task: merges BMP + MLX readings into TELEMETRY,
 │       │                  #   publishes a merged frame at 1 Hz; bumps AGG_BEAT
-│       ├── ble.rs         # On-chip BLE stack: controller, manual GATT server,
-│       │                  #   advertise loop, 1 Hz notify (esp-radio + trouble-host)
+│       ├── ble.rs         # On-chip BLE stack: extended connectable broadcast,
+│       │                  #   manufacturer-data frame at 1 Hz, PIN-gated location-
+│       │                  #   write GATT service (esp-radio + trouble-host)
+│       ├── config.rs      # Flash-backed config task: restores persisted coarse
+│       │                  #   location at boot, persists validated BLE writes
+│       │                  #   via sequential-storage MapStorage on the NVS partition
 │       └── watchdog.rs    # RWDT heartbeat supervisor (BMP_BEAT, AGG_BEAT, ADV_BEAT,
 │                          #   BLE_BEAT); all four must stay live to feed the watchdog
 ├── meteo-lib/             # Library crate: hardware-agnostic
@@ -121,8 +128,10 @@ crates/
 │       ├── battery.rs     # 1S-LiPo voltage→SoC curve (battery_pct_from_mv); host-tested
 │       ├── aggregate.rs   # SensorReading enum + Aggregator; sensor-data channel type
 │       ├── ble/
-│       │   └── frame.rs   # v4 wire frame (28 B): Telemetry, encode/decode, FrameError,
-│       │                  #   sentinels; host-tested; decode() targets Linux central
+│       │   ├── frame.rs   # v5 wire frame (38 B): Telemetry, encode/decode, FrameError,
+│       │   │              #   sentinels, uptime_s + coarse location fields; host-tested
+│       │   └── location.rs # Location (coarse ~1 km), parse_authorized_write,
+│       │                  #   AUTH_WRITE_LEN / LOCATION_WIRE_LEN; host-tested
 │       └── sensors/
 │           ├── mod.rs     # Sensor module root
 │           ├── bmp388.rs  # BMP388 pressure/temperature driver
@@ -133,8 +142,9 @@ crates/
 │           └── weather_meter.rs # SEN-15901 conversions: wind speed/dir, rain rate
 └── meteo-tui/             # Binary crate: terminal dashboard (host, x86_64-linux)
     └── src/
-        └── main.rs        # ratatui TUI: BLE connect, telemetry subscribe, render;
-                           #   diagnostics row (sky-IR occlusion, BMP388 fault bits)
+        └── main.rs        # ratatui TUI: passive BLE scan, decode manufacturer-data
+                           #   frames (company 0xFFFF), SignalState header, location
+                           #   row, diagnostics row; no GATT connection required
 ```
 
 **Library vs Binary separation:**
@@ -153,17 +163,16 @@ the target, `force-frame-pointers` (for esp-backtrace), and the espflash runner.
 ### Dashboard (`meteo-tui`)
 
 `crates/meteo-tui` is a host-only (`x86_64-unknown-linux-gnu`) `std` binary crate. It
-connects to the `MeteoStation` BLE peripheral via **bluer 0.17** (the official Rust
-BlueZ binding), subscribes to the telemetry notify characteristic, decodes each
-28-byte v4 frame via `meteo-lib::ble::frame::decode`, and renders a live terminal
-dashboard with ratatui:
+performs a **passive BLE scan** via **bluer 0.17** (the official Rust BlueZ binding),
+watches for manufacturer-data property changes on the `MeteoStation` device, decodes
+each 38-byte v5 frame from company `0xFFFF` via `meteo-lib::ble::frame::decode`, and
+renders a live terminal dashboard with ratatui. No GATT connection is made.
 
 - All frame fields (air temperature, pressure, humidity, sky/IR temperature,
-  luminosity, wind speed + direction shown together with a compass label, rain
-  rate, battery) plus the diagnostics row.
+  luminosity, wind speed + direction shown together with a compass label, rain rate,
+  battery, location) plus the diagnostics row.
 - Live scrolling air-temperature, sky-temperature, and pressure mini-charts.
-- Header bar: wall clock, app version, firmware version (read from DIS), connection
-  status.
+- Header bar: wall clock, app version, signal state (No signal / Live / Stale).
 
 **Host-only build — never build with `--workspace` on the default target.** The
 `.cargo/config.toml` default target is `riscv32imac-unknown-none-elf`; `meteo-tui`
@@ -177,26 +186,19 @@ just tui-clippy          # clippy for the dashboard only (fast iteration loop)
 
 The dashboard crate is also included in `just clippy` and `just test`.
 
-**`bluer` / `AcquireNotify` rationale.** The dashboard uses `bluer`'s
-`Characteristic::notify_io()`, which is backed by BlueZ `AcquireNotify`. This
-delivers every notification PDU over a raw file descriptor without deduplication.
-`btleplug`'s BlueZ backend uses `StartNotify` and surfaces values through the
-`PropertiesChanged`/`Value` D-Bus property, which BlueZ only re-emits when the value
-_changes_. The telemetry payload is near-constant (sensor readings barely move
-second-to-second), so that path collapses notifications to silence — the same trap
-`scripts/ble_notify_check.sh` documents and avoids.
+**`bluer` / passive-scan dedup rationale.** The dashboard uses
+`adapter.discover_devices_with_changes()` with `duplicate_data: true` in the discovery
+filter. BlueZ re-emits a `DeviceAdded` / `PropertiesChanged` event whenever a device's
+`ManufacturerData` property changes. Because `uptime_s` increments every second, the
+manufacturer-data payload is distinct on every advertisement frame, defeating BlueZ's
+property dedup (which suppresses re-emitting unchanged values). No GATT connection,
+`AcquireNotify`, or characteristic subscription is used.
 
-**DIS firmware-version transport.** The firmware exposes a standard Device
-Information Service (`0x180A`) with a Firmware Revision String (`0x2A26`). The
-dashboard reads that characteristic once on connect and displays it in the header
-alongside the app version.
-
-**Disconnect detection.** Link state is authoritative: the dashboard treats a BlueZ
-`Connected` → false transition or an EOF on the notify fd as the disconnect signal.
-Frame age is cosmetic only (it drives value greying when frames stop arriving) and
-never triggers reconnection. On reconnect, the dashboard performs a fresh bounded
-scan first — BlueZ evicts the non-bonded LE device object after disconnect, so a
-cold `connect` by address would fail until the cache is repopulated.
+**Signal state.** The `SignalState` model replaces the old connection-state machine:
+**No signal** (no frame ever received, rendered red) → **Live** (last frame within
+`STALE_AFTER` = 5 s, rendered green) → **Stale** (last frame older than 5 s, rendered
+yellow). State is derived purely from last-frame age; it is cosmetic only and never
+triggers a reconnect. The firmware-version display is removed (no DIS; no connection).
 
 **Host prerequisites.** At build time: `libdbus-1-dev`. At runtime: a running
 `bluetoothd` (present on the dev machine / gaia).
@@ -244,29 +246,54 @@ firmware.
 ### BLE — on-chip ESP32-H2 peripheral
 
 The firmware brings up the on-chip BLE 5.3 radio via **esp-radio** and
-**trouble-host**, advertises as `MeteoStation` (connectable undirected, static
-random address `F0:CA:FE:00:00:01`), and pushes a 28-byte telemetry frame at 1 Hz
-over a GATT Notify characteristic.
+**trouble-host**, advertises as `MeteoStation` (**extended connectable, non-scannable,
+undirected**, static random address `F0:CA:FE:00:00:01`), and broadcasts the 38-byte
+v5 telemetry frame as **Manufacturer-Specific Data** (company `0xFFFF`) refreshed at
+1 Hz. Any observer reads the frame passively without connecting. The advert stays
+connectable so a central can connect to set the station location via a PIN-gated GATT
+write.
 
-**GATT layout:**
+**GATT layout (location config service):**
 
 | Role           | UUID                                   |
 | -------------- | -------------------------------------- |
-| Service        | `7e700001-b1df-42a1-bb5f-6a1028c793b0` |
-| Characteristic | `7e700002-b1df-42a1-bb5f-6a1028c793b0` |
-| Properties     | Read + Notify                          |
+| Service        | `7e700010-b1df-42a1-bb5f-6a1028c793b0` |
+| Characteristic | `7e700011-b1df-42a1-bb5f-6a1028c793b0` |
+| Properties     | Read + Write                           |
 
-The characteristic value is a 28-byte frame: byte[0] is the version sentinel
-(`0x04`, FRAME_VERSION 4), bytes 1–16 are the encoded sensor data fields
-(`humidity_pct` and `luminosity_lux` are existing fields in this range), bytes
-17–18 are the rain rate (u16 LE, deci-mm/h, sentinel `u16::MAX`), byte[19] is the
-diagnostics bitfield (below), and bytes 20–27 are the four power fields (each u16
-LE, sentinel `u16::MAX`): `solar_mv` (20–21), `solar_ma` (22–23), `batt_mv`
-(24–25), `load_ma` (26–27). Byte[16] `battery_pct` is derived on-device from
-`batt_mv` via the 1S-LiPo curve. A 28-byte notify needs ATT MTU ≥ 31; the
-trouble-host `DefaultPacketPool` MTU (251) makes the host's default ATT MTU 247,
-which BlueZ negotiates via ATT ExchangeMtu before subscribing — so no MTU code is
-needed. The diagnostics bitfield:
+Telemetry is carried in the advertising Manufacturer-Specific Data, not in a GATT
+characteristic. The GATT service exposes only the location config write. The location
+characteristic write payload is 10 bytes (`AUTH_WRITE_LEN = 10`): bytes 0–3 are the
+PIN (u32 LE, compile-time `CONFIG_PIN = 911`), bytes 4–9 are the coarse location wire
+form (lat i16 LE, lon i16 LE, alt i16 LE — each × the appropriate scale factor; see
+`meteo-lib::ble::location`). Wrong PIN → ATT `INSUFFICIENT_AUTHORISATION`; bad
+length or out-of-range location → ATT `OUT_OF_RANGE`.
+
+**Security caveat:** the PIN and coordinates travel in cleartext over BLE during the
+one-time config connection (no SMP pairing or encryption). The PIN is `911` in
+firmware, scripts, and docs. This is an application-level gate that blocks accidental
+writes, not a cryptographic one. Real SMP passkey pairing is unverified on the
+esp-radio H2 controller; for a low-value device this tradeoff is deliberate.
+
+**Coarse by construction (~1 km privacy):** coordinates are stored and broadcast as
+`i16` deg×100 — 0.01° resolution (~1.1 km). The station never holds or transmits a
+finer fix.
+
+The v5 telemetry frame is 38 bytes. Byte[0] is the version sentinel (`0x05`,
+`FRAME_VERSION 5`). Bytes 0–27 are byte-for-byte identical to v4: byte[0] version,
+bytes 1–2 temperature i16 LE (centi-°C, sentinel `i16::MIN`), bytes 3–4 pressure u16
+LE (deci-hPa, sentinel `u16::MAX`), bytes 5–6 humidity u16 LE (centi-%), bytes 7–8
+sky temp i16 LE (centi-°C), bytes 9–11 luminosity (mantissa u16 LE + exponent u8),
+bytes 12–13 wind speed u16 LE (cm/s), bytes 14–15 wind direction u16 LE (deci-deg),
+byte[16] battery percent u8 (sentinel `0xFF`), bytes 17–18 rain rate u16 LE
+(deci-mm/h), byte[19] diagnostics bitfield, bytes 20–27 four power fields
+(`solar_mv`, `solar_ma`, `batt_mv`, `load_ma` — each u16 LE, sentinel `u16::MAX`).
+v5 appends: bytes 28–31 `uptime_s` u32 LE (monotonic seconds since boot, always
+present; defeats BlueZ ManufacturerData dedup so each second's broadcast is counted
+as distinct), bytes 32–33 `latitude` i16 LE (deg×100, sentinel `i16::MIN` = unset),
+bytes 34–35 `longitude` i16 LE (deg×100, `i16::MIN` = unset), bytes 36–37 `altitude`
+i16 LE (metres, `i16::MIN` = unset). Byte[16] `battery_pct` is derived on-device
+from `batt_mv` via the 1S-LiPo curve. The diagnostics bitfield:
 
 - bit 0 = sky-IR occlusion (MLX90614 sky temp too close to ambient)
 - bit 1 = BMP388 fault
@@ -278,22 +305,25 @@ needed. The diagnostics bitfield:
 - bit 7 = INA219 battery fault (battery-side monitor)
 
 Frame encoding and decoding live in `meteo-lib::ble::frame` (`Telemetry`,
-`encode`, `decode`, `FrameError`). The `decode()` path is built for a future Linux
-central; it is not used by the firmware itself.
+`encode`, `decode`, `FrameError`). The firmware calls only `encode`; `decode` is
+used by `meteo-tui` to interpret the broadcaster's manufacturer-data payload.
 
 **Implementation notes:**
 
 - The GATT server is built manually via trouble-host's `AttributeTable` /
   `AttributeServer` / `Characteristic` primitives. The `derive` macros
   (`trouble-host-macros 0.4`) are absent from the crates.io registry used by this
-  workspace, so the table is constructed by hand.
+  workspace, so the table is constructed by hand. The table hosts only the
+  location-config service (one Read + Write characteristic); the telemetry notify
+  characteristic is gone — telemetry is broadcast via advertising.
 - `esp_sync::RawMutex` is used for the attribute table mutex. trouble-host 0.6
   depends on `embassy-sync 0.7`; the workspace targets `embassy-sync 0.8`.
   `esp_sync::RawMutex` implements `RawMutex` for both versions, bridging the two.
 - An RWDT heartbeat supervisor (`crates/meteo-firmware/src/watchdog.rs`) watches
   four beats: `BMP_BEAT` (BMP388 sampler alive), `AGG_BEAT` (aggregator alive),
-  `ADV_BEAT` (advertise loop alive), and `BLE_BEAT` (notify sent). All four must
-  stay live to keep feeding the watchdog; a stalled task fires the RWDT and resets
+  `ADV_BEAT` (advertise loop alive), and `BLE_BEAT` (broadcast frame sent or
+  connection heartbeat). All four must stay live to keep feeding the watchdog; a
+  stalled task fires the RWDT and resets
   the chip. These are **task-liveness** signals — a sensor that fails to read
   degrades to `None` data without stalling the task, so an absent/failed sensor
   does not cause an RWDT reboot loop.
@@ -303,14 +333,28 @@ central; it is not used by the firmware itself.
   accessed from two tasks simultaneously.
 - **Aggregator task (`aggregator.rs`).** Each sensor task sends a `SensorReading`
   variant (defined in `meteo-lib::sensors::aggregate`) over a channel. The
-  aggregator task drains the channel, stores the most-recent reading per sensor in
-  a `TELEMETRY` static, and publishes a merged frame at 1 Hz. This is the only
-  writer of `TELEMETRY`; `ble.rs` reads it to build the notify payload.
+  aggregator task drains the channel, accumulates readings in an `Aggregator`
+  struct, and signals the `TELEMETRY` `Signal` at 1 Hz. `ble.rs` waits on
+  `TELEMETRY` to encode the `Telemetry` frame and update the manufacturer-data
+  advertisement payload via `update_adv_data_ext`.
 - **Sensor-task resilience.** Each sensor task retries initialisation in its loop
   on failure (e.g. I2C timeout) and bumps its heartbeat on every iteration
   regardless of read success. A failing sensor produces `None` fields in the frame
   rather than stalling the task, so the watchdog stays fed and BLE telemetry
   continues to flow.
+- **Flash-backed location (`config.rs`).** A dedicated task owns all flash I/O; the
+  BLE task never touches flash directly. At boot the task reads any persisted coarse
+  location from the NVS partition and seeds the aggregator via `SENSOR_CHANNEL`. On a
+  validated BLE write the BLE task signals `LOCATION_WRITE`; the config task persists
+  the 6-byte blob (lat/lon/alt i16 LE) via **`sequential-storage` 7.x `MapStorage`**
+  (`MapStorage::<u8,_,_>::new(BlockingAsync::new(flash), MapConfig::new(range),
+NoCache::new())` with `storage.fetch_item` / `storage.store_item`) and republishes
+  via `SENSOR_CHANNEL`. The NVS partition range is found at boot via
+  **`esp-bootloader-esp-idf`**'s `read_partition_table` →
+  `find_partition(PartitionType::Data(DataPartitionSubType::Nvs))`. The flash write
+  runs in a critical section (cache off < 10 ms), absorbed by the negotiated 8 s
+  supervision timeout. These dependencies raised the workspace `rust-version` to
+  `1.96`.
 - **MLX90614 wiring (bare TO-39 chip).** The MLX needs no special firmware
   sequencing — it powers up in SMBus and shares I2C0 like any other device. The one
   trap is the bare can's pinout: the datasheet pin table is a **bottom view**
@@ -356,44 +400,58 @@ central; it is not used by the firmware itself.
 
 **Wire frame (`meteo-lib::ble::frame`):**
 
-Host-tested. The `encode`/`decode` round-trip is verified on the development machine
-via `cargo nextest`. The firmware calls only `encode`; `decode` is present for the
-deferred Linux central.
+Host-tested. The `encode`/`decode` round-trip and all field sentinels are verified
+on the development machine via `cargo nextest`. The firmware calls only `encode`;
+`decode` is used by `meteo-tui` to interpret the broadcaster's manufacturer-data
+payload.
 
 **Acceptance gate:**
 
-On-device acceptance requires `gaia` (BlueZ 5.86). Two scripts cover the two halves:
+On-device acceptance requires `gaia` (BlueZ 5.86). Three scripts cover the three
+halves:
 
 ```bash
 # Link-stability soak (connect → hold 6 min → disconnect → gap → reconnect …)
 scp scripts/ble_soak.sh gaia:
 ssh gaia ./ble_soak.sh        # Ctrl-C to stop
 
-# Data-flow check (subscribe to notify, assert ≥5 well-formed frames in 15 s)
-scp scripts/ble_notify_check.sh gaia:
-ssh gaia ./ble_notify_check.sh
+# Broadcast data-flow check (passive scan, ≥5 well-formed 38-byte v5 frames in 15 s)
+scp scripts/ble_broadcast_check.sh gaia:
+ssh gaia ./ble_broadcast_check.sh
+
+# Set station location (one-time config write, PIN-authenticated)
+scp scripts/ble_set_location.sh gaia:
+ssh gaia ./ble_set_location.sh 48.8566 2.3522 35
 ```
 
 `ble_soak.sh` prints one `PASS (held 360s)` line per cycle and exits non-zero on
 any mid-window drop or failed reconnect. A single passing cycle is **not**
-acceptance — the link must hold and repeat over a sustained run.
+acceptance — the link must hold and repeat over a sustained run. The soak exercises
+the **location-config GATT channel** (service `7e700010-…`, characteristic
+`7e700011-…`) and the retained 8 s supervision-timeout negotiation; broadcast
+telemetry continuity is checked separately by `ble_broadcast_check.sh`.
 
-`ble_notify_check.sh` connects, then subscribes via BlueZ **`AcquireNotify`** (a
-python-dbus reader), captures frames for `WINDOW_SECS` (default 15 s), and asserts
-at least `MIN_FRAMES` (default 5) 28-byte frames with byte[0] == 0x04. It uses
-`AcquireNotify` — **not** bluetoothctl's `notify on` output — because BlueZ only
-re-emits the `Value` property when it _changes_, and the near-constant telemetry
-gets deduped to silence even while notifications flow on-air; `AcquireNotify`
-delivers every PDU raw. Needs `python3` + `python-dbus` on gaia (`bleak` is not
-installed; `btmon` would also work but needs root). If the device is not already in
-blueman's cache the script does one bounded, self-terminating `--timeout` discovery
-(verified to leave the adapter idle, not wedged). Both env knobs are overridable.
+`ble_broadcast_check.sh` runs a bounded, self-terminating `bluetoothctl --timeout`
+passive scan, then polls the `ManufacturerData` D-Bus property via python-dbus for
+`WINDOW_SECS` (default 15 s). It counts **distinct** frames (detected by payload
+change — driven by the per-second `uptime_s` increment) and asserts at least
+`MIN_FRAMES` (default 5) 38-byte frames with byte[0] == `0x05`. Because `uptime_s`
+changes every second, near-constant sensor readings no longer defeat BlueZ's
+ManufacturerData dedup. Needs `python3` + `python-dbus` on gaia. Both env knobs
+(`WINDOW_SECS`, `MIN_FRAMES`) are overridable.
+
+`ble_set_location.sh LAT LON [ALT_M]` computes the 10-byte PIN+coords payload,
+connects to the config GATT channel, and writes it to the location characteristic
+(`7e700011-…`). `PIN` env defaults to `911`; a wrong PIN → ATT error → non-zero
+exit.
 
 **Methodology traps (learned the hard way — do not bypass):**
 
-- **Never** run a blocking scan (`timeout … btmgmt find`, `bluetoothctl scan on`)
-  to find the device — it wedges the adapter in `Discovering: yes`. Both scripts
-  connect by address off blueman's standing discovery cache instead.
+- **Never** run a blocking scan (`timeout … btmgmt find`, or `bluetoothctl scan on`
+  **without** `--timeout`) — it wedges the adapter in `Discovering: yes`. Use
+  `bluetoothctl --timeout N scan on` (bounded, self-terminating) when a discovery is
+  needed. `ble_soak.sh` connects by address off blueman's standing cache without
+  scanning at all.
 - Query link state via `busctl` (`org.bluez.Device1.Connected`) or the BlueZ
   cache, **never** a second scan.
 
@@ -404,7 +462,7 @@ But BlueZ evicts the non-bonded LE device object once discovery stops, so a _col
 `bluetoothctl connect F0:CA:FE:00:00:01` reports `Device … not available` until a
 bounded discovery repopulates the cache. Always do one bounded, self-terminating
 `bluetoothctl --timeout N scan on` immediately before each (re)connect — the same
-scan-then-connect-by-address pattern the soak scripts use. The 8 s supervision
+scan-then-connect-by-address pattern `ble_set_location.sh` uses. The 8 s supervision
 negotiation runs in the firmware accept loop on every connection, so reconnections
 get the same robust link as the first.
 
