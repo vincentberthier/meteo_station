@@ -8,6 +8,7 @@
 
 mod app;
 mod ble;
+mod compass;
 mod model;
 mod plot;
 mod theme;
