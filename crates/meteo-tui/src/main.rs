@@ -37,6 +37,24 @@ impl From<MarkerArg> for plot::MarkerStyle {
     }
 }
 
+/// Terminal image-protocol selection. `Auto` keeps `ratatui-image`'s terminal
+/// query (`Kitty` on `WezTerm`); the others force a specific protocol for
+/// terminals whose auto-detected protocol misbehaves (many simultaneous images).
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+enum ProtocolArg {
+    /// Auto-detect via terminal query (default).
+    #[default]
+    Auto,
+    /// Kitty graphics protocol.
+    Kitty,
+    /// Sixel.
+    Sixel,
+    /// iTerm2 inline images.
+    Iterm2,
+    /// Unicode half-blocks (works everywhere; chunky).
+    Halfblocks,
+}
+
 #[derive(Parser)]
 #[command(version, about = "MeteoStation live BLE dashboard")]
 struct Cli {
@@ -62,6 +80,11 @@ struct Cli {
     /// default — in a braille terminal the fill makes spiky signals unreadable.
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     fill: bool,
+
+    /// Override the terminal image protocol (auto / kitty / sixel / iterm2 /
+    /// halfblocks). Use when the auto-detected protocol fails to show charts.
+    #[arg(long, value_enum, default_value_t = ProtocolArg::Auto)]
+    image_protocol: ProtocolArg,
 }
 
 #[tokio::main]
@@ -77,8 +100,18 @@ async fn main() -> anyhow::Result<()> {
 
     // Query terminal graphics protocol capabilities BEFORE entering alternate
     // screen — the query uses stdio which is unavailable inside alternate mode.
-    let picker = ratatui_image::picker::Picker::from_query_stdio()
+    let mut picker = ratatui_image::picker::Picker::from_query_stdio()
         .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks());
+    let forced = match cli.image_protocol {
+        ProtocolArg::Auto => None,
+        ProtocolArg::Kitty => Some(ratatui_image::picker::ProtocolType::Kitty),
+        ProtocolArg::Sixel => Some(ratatui_image::picker::ProtocolType::Sixel),
+        ProtocolArg::Iterm2 => Some(ratatui_image::picker::ProtocolType::Iterm2),
+        ProtocolArg::Halfblocks => Some(ratatui_image::picker::ProtocolType::Halfblocks),
+    };
+    if let Some(pt) = forced {
+        picker.set_protocol_type(pt);
+    }
     let mut images = image_render::Images::new(picker);
 
     // ratatui::init() enables raw mode + alternate screen AND installs a panic

@@ -441,6 +441,21 @@ pub struct Images {
     compass: Option<CompassCache>,
 }
 
+/// Append a diagnostic line to the debug log when `METEO_TUI_DEBUG` is set in
+/// the environment. No-op otherwise (the TUI owns the terminal, so stderr is
+/// unusable). Used to investigate image-protocol rendering on the real host.
+fn debug_log(msg: &str) {
+    use std::io::Write as _;
+    if let Some(path) = std::env::var_os("METEO_TUI_DEBUG")
+        && let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::path::Path::new(&path))
+    {
+        writeln!(f, "{msg}").ok();
+    }
+}
+
 impl Images {
     /// Normal constructor.
     ///
@@ -466,6 +481,12 @@ impl Images {
             image::load_from_memory(include_bytes!("../assets/compass/compass-needle.png"))
                 .expect("embedded compass-needle.png must be a valid PNG")
                 .to_rgba8();
+
+        debug_log(&format!(
+            "Images::new protocol={:?} font={:?}",
+            picker.protocol_type(),
+            picker.font_size(),
+        ));
 
         Self {
             picker,
@@ -509,6 +530,13 @@ impl Images {
 
         if self.charts.get(id).is_none_or(|c| c.key != key) {
             let img = build(w_px, h_px);
+            debug_log(&format!(
+                "chart[{id}] build px={w_px}x{h_px} img={}x{} area={}x{}",
+                img.width(),
+                img.height(),
+                area.width,
+                area.height,
+            ));
             let proto = self
                 .picker
                 .new_resize_protocol(DynamicImage::ImageRgba8(img));
@@ -521,6 +549,9 @@ impl Images {
                 area,
                 &mut cache.proto,
             );
+            if let Some(r) = cache.proto.last_encoding_result() {
+                debug_log(&format!("chart[{id}] encode={r:?}"));
+            }
         }
     }
 
@@ -592,6 +623,9 @@ impl Images {
                 target,
                 &mut cache.proto,
             );
+            if let Some(r) = cache.proto.last_encoding_result() {
+                debug_log(&format!("compass encode={r:?} target={target:?}"));
+            }
         }
     }
 }
