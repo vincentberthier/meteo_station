@@ -441,6 +441,11 @@ pub struct Images {
     compass: Option<CompassCache>,
 }
 
+/// Longest-side pixel cap for rasterized chart images. Full `HiDPI` panels reach
+/// ~1656 px; nine such images overwhelm the terminal's image budget, so charts
+/// are rasterized no larger than this and upscaled to the cell area on display.
+const CHART_MAX_DIM: u32 = 600;
+
 /// Append a diagnostic line to the debug log when `METEO_TUI_DEBUG` is set in
 /// the environment. No-op otherwise (the TUI owns the terminal, so stderr is
 /// unusable). Used to investigate image-protocol rendering on the real host.
@@ -524,8 +529,29 @@ impl Images {
         F: FnOnce(u32, u32) -> RgbaImage,
     {
         let font = self.picker.font_size();
-        let w_px = u32::from(area.width).saturating_mul(u32::from(font.width));
-        let h_px = u32::from(area.height).saturating_mul(u32::from(font.height));
+        let raw_w = u32::from(area.width).saturating_mul(u32::from(font.width));
+        let raw_h = u32::from(area.height).saturating_mul(u32::from(font.height));
+        // Cap the raster resolution. On HiDPI terminals a full-size panel is
+        // ~1656×696 px; nine of those is ~10 MP of image escapes per frame, which
+        // terminals silently drop. A line chart reads fine rasterized smaller and
+        // upscaled by the resize protocol to the cell area.
+        let longest = raw_w.max(raw_h).max(1);
+        let (w_px, h_px) = if longest > CHART_MAX_DIM {
+            (
+                raw_w
+                    .saturating_mul(CHART_MAX_DIM)
+                    .checked_div(longest)
+                    .unwrap_or(raw_w)
+                    .max(1),
+                raw_h
+                    .saturating_mul(CHART_MAX_DIM)
+                    .checked_div(longest)
+                    .unwrap_or(raw_h)
+                    .max(1),
+            )
+        } else {
+            (raw_w, raw_h)
+        };
         let key = (version, area.width, area.height);
 
         if self.charts.get(id).is_none_or(|c| c.key != key) {
