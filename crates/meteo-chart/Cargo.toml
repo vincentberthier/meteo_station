@@ -1,0 +1,18 @@
+[package]
+name = "meteo-chart"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# pure std crate — no ratatui, no bluer; compiles for host AND wasm32
+
+[dev-dependencies]
+test-log = { workspace = true }
+env_logger = { workspace = true }
+
+[lints]
+workspace = true

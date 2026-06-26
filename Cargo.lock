@@ -2684,6 +2684,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "meteo-chart"
+version = "0.1.0"
+dependencies = [
+ "env_logger",
+ "test-log",
+]
+
+[[package]]
 name = "meteo-firmware"
 version = "0.1.0"
 dependencies = [
@@ -2738,6 +2746,7 @@ dependencies = [
  "futures",
  "image",
  "imageproc",
+ "meteo-chart",
  "meteo-lib",
  "ratatui",
  "ratatui-image",

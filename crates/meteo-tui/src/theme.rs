@@ -1,51 +1,92 @@
 //! Catppuccin Mocha colour palette and threshold→colour helpers for the dashboard.
+//!
+//! The canonical RGB values live in [`meteo_chart::palette`]; this module
+//! re-exposes them as `ratatui::style::Color::Rgb` constants so the rest of the
+//! TUI can keep using `theme::PEACH` etc. unchanged.
 
+use meteo_chart::palette;
 use ratatui::style::Color;
 
 /// App background.
-pub const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
+pub const BASE: Color = Color::Rgb(palette::BASE.0, palette::BASE.1, palette::BASE.2);
 /// Panel fill.
-pub const MANTLE: Color = Color::Rgb(0x18, 0x18, 0x25);
+pub const MANTLE: Color = Color::Rgb(palette::MANTLE.0, palette::MANTLE.1, palette::MANTLE.2);
 /// Tracks / wells (chart backgrounds).
-pub const CRUST: Color = Color::Rgb(0x11, 0x11, 0x1b);
+pub const CRUST: Color = Color::Rgb(palette::CRUST.0, palette::CRUST.1, palette::CRUST.2);
 /// Panel outline.
-pub const BORDER: Color = Color::Rgb(0x2a, 0x2a, 0x3c);
+pub const BORDER: Color = Color::Rgb(palette::BORDER.0, palette::BORDER.1, palette::BORDER.2);
 /// Chip frame / separators.
-pub const SURFACE0: Color = Color::Rgb(0x31, 0x32, 0x44);
+pub const SURFACE0: Color = Color::Rgb(
+    palette::SURFACE0.0,
+    palette::SURFACE0.1,
+    palette::SURFACE0.2,
+);
 /// X-axis / faint strokes.
-pub const SURFACE2: Color = Color::Rgb(0x58, 0x5b, 0x70);
+pub const SURFACE2: Color = Color::Rgb(
+    palette::SURFACE2.0,
+    palette::SURFACE2.1,
+    palette::SURFACE2.2,
+);
 /// Values / clock.
-pub const TEXT: Color = Color::Rgb(0xcd, 0xd6, 0xf4);
+pub const TEXT: Color = Color::Rgb(palette::TEXT.0, palette::TEXT.1, palette::TEXT.2);
 /// Sensor names.
-pub const SUBTEXT1: Color = Color::Rgb(0xba, 0xc2, 0xde);
+pub const SUBTEXT1: Color = Color::Rgb(
+    palette::SUBTEXT1.0,
+    palette::SUBTEXT1.1,
+    palette::SUBTEXT1.2,
+);
 /// Panel titles / cardinals.
-pub const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
+pub const SUBTEXT0: Color = Color::Rgb(
+    palette::SUBTEXT0.0,
+    palette::SUBTEXT0.1,
+    palette::SUBTEXT0.2,
+);
 /// Section labels / units / dew point.
-pub const OVERLAY2: Color = Color::Rgb(0x93, 0x99, 0xb2);
+pub const OVERLAY2: Color = Color::Rgb(
+    palette::OVERLAY2.0,
+    palette::OVERLAY2.1,
+    palette::OVERLAY2.2,
+);
 /// Min / max axes / maintenance.
-pub const OVERLAY1: Color = Color::Rgb(0x7f, 0x84, 0x9c);
+pub const OVERLAY1: Color = Color::Rgb(
+    palette::OVERLAY1.0,
+    palette::OVERLAY1.1,
+    palette::OVERLAY1.2,
+);
 /// Dimmed labels.
-pub const OVERLAY0: Color = Color::Rgb(0x6c, 0x70, 0x86);
+pub const OVERLAY0: Color = Color::Rgb(
+    palette::OVERLAY0.0,
+    palette::OVERLAY0.1,
+    palette::OVERLAY0.2,
+);
 /// Air temperature.
-pub const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
+pub const PEACH: Color = Color::Rgb(palette::PEACH.0, palette::PEACH.1, palette::PEACH.2);
 /// Sky temperature.
-pub const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
+pub const LAVENDER: Color = Color::Rgb(
+    palette::LAVENDER.0,
+    palette::LAVENDER.1,
+    palette::LAVENDER.2,
+);
 /// Pressure / battery gauge / gust.
-pub const TEAL: Color = Color::Rgb(0x94, 0xe2, 0xd5);
+pub const TEAL: Color = Color::Rgb(palette::TEAL.0, palette::TEAL.1, palette::TEAL.2);
 /// Humidity.
-pub const SAPPHIRE: Color = Color::Rgb(0x74, 0xc7, 0xec);
+pub const SAPPHIRE: Color = Color::Rgb(
+    palette::SAPPHIRE.0,
+    palette::SAPPHIRE.1,
+    palette::SAPPHIRE.2,
+);
 /// Luminosity / solar / warn.
-pub const YELLOW: Color = Color::Rgb(0xf9, 0xe2, 0xaf);
+pub const YELLOW: Color = Color::Rgb(palette::YELLOW.0, palette::YELLOW.1, palette::YELLOW.2);
 /// Rain.
-pub const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
+pub const BLUE: Color = Color::Rgb(palette::BLUE.0, palette::BLUE.1, palette::BLUE.2);
 /// Wind / compass.
-pub const SKY: Color = Color::Rgb(0x89, 0xdc, 0xeb);
+pub const SKY: Color = Color::Rgb(palette::SKY.0, palette::SKY.1, palette::SKY.2);
 /// Battery / charging / OK.
-pub const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
+pub const GREEN: Color = Color::Rgb(palette::GREEN.0, palette::GREEN.1, palette::GREEN.2);
 /// Load draw.
-pub const MAUVE: Color = Color::Rgb(0xcb, 0xa6, 0xf7);
+pub const MAUVE: Color = Color::Rgb(palette::MAUVE.0, palette::MAUVE.1, palette::MAUVE.2);
 /// Fault / North marker.
-pub const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
+pub const RED: Color = Color::Rgb(palette::RED.0, palette::RED.1, palette::RED.2);
 
 /// Battery state-of-charge → gauge/percent colour.
 ///

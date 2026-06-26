@@ -1084,7 +1084,7 @@ just web-build       # SSR + wasm build succeeds
 
 Progress tracking (checked during implementation):
 
-- [ ] 1. `meteo-chart` extraction + `meteo-tui` migration
+- [x] 1. `meteo-chart` extraction + `meteo-tui` migration — created meteo-chart (palette+chart+format, 27 tests), migrated meteo-tui via re-export; theme derives from palette; wasm32 build confirmed. Spec review: pass.
 - [ ] 2. `meteo-web` skeleton + cargo-leptos wiring (SSR hello)
 - [ ] 3. SQLite storage layer
 - [ ] 4. Collector task + pure bucket accumulator
