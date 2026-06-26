@@ -49,7 +49,10 @@ impl FrameEvent {
     ///
     /// Useful in tests and wherever only the decoded telemetry is available.
     #[must_use]
-    #[allow(dead_code, reason = "called from test helpers; unused in the binary until next substep")]
+    #[allow(
+        dead_code,
+        reason = "called from test helpers; unused in the binary until next substep"
+    )]
     pub const fn new(telemetry: Telemetry) -> Self {
         Self {
             telemetry,
