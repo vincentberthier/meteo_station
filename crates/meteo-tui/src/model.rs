@@ -90,6 +90,18 @@ pub fn fmt_lux(v: Option<f32>) -> String {
     fmt_unit(v, "lux", 0)
 }
 
+/// Format luminosity in kilolux.
+///
+/// Returns `"N/A"` for `None`, otherwise `"{value:.1} klx"`.
+#[must_use]
+#[allow(dead_code, reason = "wired in a later rendering substep")]
+pub fn fmt_lux_klx(lux: Option<f32>) -> String {
+    lux.map_or_else(
+        || "N/A".to_owned(),
+        |x| format!("{:.1} klx", f64::from(x) / 1000.0),
+    )
+}
+
 /// 16-point compass label for a heading in degrees.
 ///
 /// Convention: 0°=N, 90°=E, 180°=S, 270°=W (matches the firmware's
@@ -100,6 +112,30 @@ pub fn compass_label(deg: f32) -> &'static str {
     const POINTS: [&str; 16] = [
         "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW",
         "NW", "NNW",
+    ];
+    let norm = deg.rem_euclid(360.0);
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "round() of a value in [0,16] is a small non-negative whole number"
+    )]
+    let sector = (norm / 22.5).round() as usize;
+    // 360° rounds up to sector 16, which wraps back to N (sector 0).
+    let idx = if sector >= POINTS.len() { 0 } else { sector };
+    POINTS[idx]
+}
+
+/// French 16-point compass label for a heading in degrees.
+///
+/// Convention: 0°=N, 90°=E, 180°=S, 270°=O (Ouest). Same bucketing as
+/// [`compass_label`]; returns the French rose:
+/// `N NNE NE ENE E ESE SE SSE S SSO SO OSO O ONO NO NNO`.
+#[must_use]
+#[allow(dead_code, reason = "wired in a later rendering substep")]
+pub fn compass_label_fr(deg: f32) -> &'static str {
+    const POINTS: [&str; 16] = [
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSO", "SO", "OSO", "O", "ONO",
+        "NO", "NNO",
     ];
     let norm = deg.rem_euclid(360.0);
     #[expect(
@@ -190,6 +226,49 @@ pub fn fmt_load(batt_mv: Option<u16>, ma: Option<u16>) -> String {
     )
 }
 
+/// Power in watts from bus millivolts × current milliamperes.
+///
+/// Returns `(mv / 1000) × (ma / 1000)` as `Some(f64)`, or `None` if either
+/// input is `None`.
+#[must_use]
+#[allow(dead_code, reason = "wired in a later rendering substep")]
+pub fn power_w(mv: Option<u16>, ma: Option<u16>) -> Option<f64> {
+    Some((f64::from(mv?) / 1000.0) * (f64::from(ma?) / 1000.0))
+}
+
+/// Nominal 1S-LiPo energy budget for the crude autonomy estimate (best-effort).
+#[allow(dead_code, reason = "wired in a later rendering substep")]
+pub const BATTERY_WH: f64 = 9.6; // 3.7 V × 2.6 Ah
+
+/// Battery flow status line for the ÉNERGIE card.
+///
+/// `net = solar_w − load_w`. Returns the rendered line:
+/// - `net > 0` → `"▲ en charge · +{net:.1} W"`
+/// - `net < 0` → `"▼ décharge · {net:.1} W · ~{h:.1} h"` (autonomy from `pct`
+///   and [`BATTERY_WH`])
+/// - `net ≈ 0` → `"— stable"`
+///
+/// Returns `"N/A"` when either power reading is `None`.
+#[must_use]
+#[allow(dead_code, reason = "wired in a later rendering substep")]
+pub fn fmt_battery_flow(solar_w: Option<f64>, load_w: Option<f64>, pct: Option<u8>) -> String {
+    let (Some(s), Some(l)) = (solar_w, load_w) else {
+        return "N/A".to_owned();
+    };
+    let net = s - l;
+    if net > 0.05 {
+        format!("▲ en charge · +{net:.1} W")
+    } else if net < -0.05 {
+        let autonomy = pct.map(|p| BATTERY_WH * f64::from(p) / 100.0 / l);
+        autonomy.map_or_else(
+            || format!("▼ décharge · {net:.1} W"),
+            |h| format!("▼ décharge · {net:.1} W · ~{h:.1} h"),
+        )
+    } else {
+        "— stable".to_owned()
+    }
+}
+
 /// Format the diagnostics bitfield as a human-readable status line.
 ///
 /// `"OK"` when no flags are set; otherwise a comma-joined list of active faults,
@@ -245,6 +324,71 @@ fn fmt_unit(v: Option<f32>, unit: &str, prec: usize) -> String {
     v.map_or_else(|| "N/A".to_owned(), |x| format!("{x:.prec$} {unit}"))
 }
 
+/// Dew point in °C computed from the Magnus/WMO formula (a=17.62, b=243.12 °C).
+///
+/// `Td = b·γ / (a−γ)` with `γ = ln(rh/100) + a·t/(b+t)`.
+/// `rh` is clamped to `(0.01, 100]` to avoid `ln(0)`.
+#[must_use]
+#[allow(dead_code, reason = "wired in a later rendering substep")]
+pub fn dew_point_c(temp_c: f32, rh_pct: f32) -> f32 {
+    const A: f32 = 17.62;
+    const B: f32 = 243.12;
+    let rh = rh_pct.clamp(0.01, 100.0) / 100.0;
+    let gamma = rh.ln() + (A * temp_c) / (B + temp_c);
+    B * gamma / (A - gamma)
+}
+
+/// 10-min air-temperature trend classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code, reason = "wired in a later rendering substep")]
+pub enum Trend {
+    /// Temperature is increasing.
+    Rising,
+    /// Temperature is decreasing.
+    Falling,
+    /// Temperature change is within the stability epsilon.
+    Stable,
+}
+
+/// Classify a trend delta.
+///
+/// Returns [`Trend::Stable`] if `|delta| < eps`, [`Trend::Rising`] for a positive
+/// delta, and [`Trend::Falling`] for a negative delta.
+#[must_use]
+#[allow(dead_code, reason = "wired in a later rendering substep")]
+pub fn classify_trend(delta: f64, eps: f64) -> Trend {
+    if delta.abs() < eps {
+        Trend::Stable
+    } else if delta > 0.0 {
+        Trend::Rising
+    } else {
+        Trend::Falling
+    }
+}
+
+/// Format an uptime duration as a compact human-readable label.
+///
+/// - ≥ 3600 s → `"{h}h{mm}m"` (e.g. 3725 → `"1h02m"`)
+/// - ≥ 60 s   → `"{m}m{ss}s"` (e.g. 90 → `"1m30s"`)
+/// - < 60 s   → `"0m{ss}s"` (e.g. 45 → `"0m45s"`)
+///
+/// Minutes and seconds are zero-padded to two digits; hours are unpadded.
+#[must_use]
+#[allow(dead_code, reason = "wired in a later rendering substep")]
+pub fn fmt_uptime(secs: u32) -> String {
+    if secs >= 3600 {
+        let h = secs / 3600;
+        let mm = (secs % 3600) / 60;
+        format!("{h}h{mm:02}m")
+    } else if secs >= 60 {
+        let m = secs / 60;
+        let ss = secs % 60;
+        format!("{m}m{ss:02}s")
+    } else {
+        format!("0m{secs:02}s")
+    }
+}
+
 /// Capped time-series of `(seconds-since-session-start, value)` points for charting.
 pub struct Series {
     points: VecDeque<(f64, f64)>,
@@ -253,12 +397,21 @@ pub struct Series {
 
 impl Series {
     /// Default capacity: 600 points = 10 min at the 1 Hz feed.
+    ///
+    /// **Invariant:** the count cap (600 points) must cover [`Series::WINDOW_SECS`]
+    /// (600 s) of wall-clock; this holds **only** if the producer pushes at ≤ 1 Hz.
+    /// The `uptime_s` dedup in the scan loop enforces that rate — see the §4 dedup
+    /// guard in `app.rs` that prevents the chart-truncation trap from returning
+    /// silently.
     pub const DEFAULT_CAP: usize = 600;
 
     /// Visible chart window, in seconds. The x-axis is right-anchored at the
     /// latest sample and spans this many seconds backwards, so new points enter
     /// at the right edge and scroll left as the window fills. Matched to
     /// [`Series::DEFAULT_CAP`] at the 1 Hz feed (600 points ≈ 600 s).
+    ///
+    /// See [`Series::DEFAULT_CAP`] for the count/time invariant and the `uptime_s`
+    /// dedup guard that upholds it.
     pub const WINDOW_SECS: f64 = 600.0;
 
     /// Create a new `Series` with the given capacity.
@@ -315,6 +468,37 @@ impl Series {
     pub fn x_window(&self) -> Option<[f64; 2]> {
         let hi = self.points.back()?.0;
         Some([hi - Self::WINDOW_SECS, hi])
+    }
+
+    /// Maximum value among points whose timestamp is within `window_secs` of the
+    /// latest point.
+    ///
+    /// Returns `None` if the series is empty. Drives the 60 s gust calculation.
+    #[must_use]
+    #[allow(dead_code, reason = "wired in a later rendering substep")]
+    pub fn window_max(&self, window_secs: f64) -> Option<f64> {
+        let last_t = self.points.back()?.0;
+        self.points
+            .iter()
+            .filter(|(t, _)| *t >= last_t - window_secs)
+            .map(|(_, v)| *v)
+            .fold(None, |acc, v| Some(acc.map_or(v, |m: f64| m.max(v))))
+    }
+
+    /// Difference between the latest value and the oldest point within `window_secs`.
+    ///
+    /// Returns `None` if the series is empty. Drives the 10-min trend arrow.
+    #[must_use]
+    #[allow(dead_code, reason = "wired in a later rendering substep")]
+    pub fn trend_delta(&self, window_secs: f64) -> Option<f64> {
+        let (last_t, latest_v) = *self.points.back()?;
+        let oldest_v = self
+            .points
+            .iter()
+            .filter(|(t, _)| *t >= last_t - window_secs)
+            .map(|(_, v)| *v)
+            .next()?;
+        Some(latest_v - oldest_v)
     }
 }
 
@@ -850,6 +1034,214 @@ mod tests {
         assert_eq!(fmt_location(None, None, None), "not set");
         assert_eq!(fmt_location(Some(48.85), None, Some(35.0)), "not set");
         assert_eq!(fmt_location(None, Some(2.35), None), "not set");
+        Ok(())
+    }
+
+    // --- dew_point_c tests ---
+
+    #[test]
+    fn dew_point_known_value() -> TestResult {
+        // Given
+        let temp_c = 20.0_f32;
+        let rh_pct = 50.0_f32;
+
+        // When
+        let result = dew_point_c(temp_c, rh_pct);
+
+        // Then — Magnus formula for 20 °C / 50 % RH ≈ 9.3 °C
+        assert!(
+            (result - 9.3_f32).abs() < 0.3,
+            "dew point should be ≈ 9.3 °C, got {result}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dew_point_saturated_equals_temp() -> TestResult {
+        // Given — saturated air (100 % RH) → dew point equals air temperature
+        let temp_c = 15.0_f32;
+        let rh_pct = 100.0_f32;
+
+        // When
+        let result = dew_point_c(temp_c, rh_pct);
+
+        // Then
+        assert!(
+            (result - temp_c).abs() < 0.05,
+            "at 100 % RH dew point should equal temp (15 °C), got {result}"
+        );
+        Ok(())
+    }
+
+    // --- compass_label_fr tests ---
+
+    #[test]
+    fn compass_label_fr_cardinals_and_west_is_o() -> TestResult {
+        // Given / When / Then — four cardinals; West is "O" in French
+        assert_eq!(compass_label_fr(0.0), "N");
+        assert_eq!(compass_label_fr(90.0), "E");
+        assert_eq!(compass_label_fr(180.0), "S");
+        assert_eq!(compass_label_fr(270.0), "O");
+        // Inter-cardinal points from the spec
+        assert_eq!(compass_label_fr(202.5), "SSO");
+        assert_eq!(compass_label_fr(337.5), "NNO");
+        Ok(())
+    }
+
+    // --- classify_trend tests ---
+
+    #[test]
+    fn classify_trend_bands() -> TestResult {
+        // Given / When / Then
+        assert_eq!(classify_trend(0.05, 0.1), Trend::Stable);
+        assert_eq!(classify_trend(0.3, 0.1), Trend::Rising);
+        assert_eq!(classify_trend(-0.3, 0.1), Trend::Falling);
+        Ok(())
+    }
+
+    // --- fmt_lux_klx tests ---
+
+    #[test]
+    fn fmt_lux_klx_divides_by_1000() -> TestResult {
+        // Given / When / Then
+        assert_eq!(fmt_lux_klx(Some(3426.0)), "3.4 klx");
+        assert_eq!(fmt_lux_klx(None), "N/A");
+        Ok(())
+    }
+
+    // --- power_w tests ---
+
+    #[test]
+    fn power_w_multiplies() -> TestResult {
+        // Given — 15.0 V, 600 mA → 9.0 W
+        let result = power_w(Some(15_000), Some(600));
+
+        // Then
+        assert!(
+            (result.ok_or("expected Some")? - 9.0).abs() < 1e-9,
+            "power should be 9.0 W"
+        );
+        // None propagates when either input is None
+        assert_eq!(power_w(None, Some(600)), None);
+        assert_eq!(power_w(Some(15_000), None), None);
+        Ok(())
+    }
+
+    // --- fmt_battery_flow tests ---
+
+    #[test]
+    fn fmt_battery_flow_charging_and_discharging() -> TestResult {
+        // Given — solar > load: charging
+        let charging = fmt_battery_flow(Some(5.0), Some(2.0), Some(80));
+
+        // Then
+        assert!(
+            charging.starts_with("▲ en charge"),
+            "charging line should start with '▲ en charge', got: {charging}"
+        );
+
+        // Given — load > solar: discharging with autonomy
+        let discharging = fmt_battery_flow(Some(1.0), Some(3.0), Some(50));
+
+        // Then
+        assert!(
+            discharging.starts_with("▼ décharge"),
+            "discharge line should start with '▼ décharge', got: {discharging}"
+        );
+        assert!(
+            discharging.contains('h'),
+            "discharge line should contain autonomy hours, got: {discharging}"
+        );
+        Ok(())
+    }
+
+    // --- Series::window_max tests ---
+
+    #[test]
+    fn series_window_max_only_within_window() -> TestResult {
+        // Given — three points; only two fall inside the 60 s window
+        let mut s = Series::new(Series::DEFAULT_CAP);
+        s.push(0.0, 5.0);
+        s.push(10.0, 9.0);
+        s.push(70.0, 3.0);
+
+        // When — last_t=70, window=60 → filter t≥10 → points (10,9) and (70,3)
+        let result = s.window_max(60.0);
+
+        // Then
+        assert_eq!(result, Some(9.0));
+        Ok(())
+    }
+
+    #[test]
+    fn series_window_max_empty_is_none() -> TestResult {
+        // Given
+        let s = Series::new(Series::DEFAULT_CAP);
+
+        // When / Then
+        assert_eq!(s.window_max(60.0), None);
+        Ok(())
+    }
+
+    // --- Series::trend_delta tests ---
+
+    #[test]
+    fn series_trend_delta_uses_oldest_in_window() -> TestResult {
+        // Given — two points spanning exactly the window
+        let mut s = Series::new(Series::DEFAULT_CAP);
+        s.push(0.0, 10.0);
+        s.push(600.0, 12.0);
+
+        // When — window 600 s → oldest_in_window=(0,10), latest=(600,12)
+        let result = s.trend_delta(600.0);
+
+        // Then
+        assert_eq!(result, Some(2.0));
+        Ok(())
+    }
+
+    #[test]
+    fn series_trend_delta_empty_is_none() -> TestResult {
+        // Given
+        let s = Series::new(Series::DEFAULT_CAP);
+
+        // When / Then
+        assert_eq!(s.trend_delta(600.0), None);
+        Ok(())
+    }
+
+    // --- fmt_uptime tests ---
+
+    #[test]
+    fn fmt_uptime_hours() -> TestResult {
+        // Given — 3725 s = 1 h 2 m 5 s → "1h02m"
+        // When
+        let result = fmt_uptime(3725);
+
+        // Then
+        assert_eq!(result, "1h02m");
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_uptime_minutes() -> TestResult {
+        // Given — 90 s = 1 m 30 s → "1m30s"
+        // When
+        let result = fmt_uptime(90);
+
+        // Then
+        assert_eq!(result, "1m30s");
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_uptime_seconds_only() -> TestResult {
+        // Given — 45 s → "0m45s"
+        // When
+        let result = fmt_uptime(45);
+
+        // Then
+        assert_eq!(result, "0m45s");
         Ok(())
     }
 }
