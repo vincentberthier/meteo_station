@@ -1090,7 +1090,7 @@ Progress tracking (checked during implementation):
 - [x] 4. Collector task + pure bucket accumulator — ssr-only collector (bluer passive scan, observer-based reconnect, no sleep) + pure BucketAccumulator (vector-mean wind dir, None-skipping), 6 tests. Spec review: pass.
 - [x] 5. Server functions + SSE live endpoint — AppState + get_history/get_comparison_trace server fns + 1 Hz SSE /live (pure live_event), collector spawned + context wired in main.rs, 5 tests. Spec review: pass.
 - [x] 6. Catppuccin CSS + fonts + app shell/routing — build.rs generates \_palette.scss (22 vars) from meteo_chart::palette, JetBrains Mono + IBM Plex Sans vendored, compass SVGs vendored, Catppuccin layout (var(--\*), FR strings), App shell + 2 routes, 3 palette tests. Spec review: pass.
-- [ ] 7. `PlotPanel` SVG chart + header
+- [x] 7. `PlotPanel` SVG chart + header — ChartSeries + PlotPanel (smoothing, bounds, axis labels, pure project(), CRUST well, gridlines, min–max band, gradient fill, trace) + Header (clock/version/SignalLevel FR), 3 tests. Spec review: pass.
 - [ ] 8. Wind compass component
 - [ ] 9. All-panels page (live band + grid + time select)
 - [ ] 10. Comparison page

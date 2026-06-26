@@ -26,6 +26,7 @@
 )]
 
 pub mod api;
+pub mod components;
 pub mod types;
 
 #[cfg(feature = "ssr")]
@@ -43,6 +44,8 @@ use leptos_router::{
     StaticSegment,
     components::{Route, Router, Routes},
 };
+
+use components::header::{Header, SignalLevel};
 
 /// HTML shell returned for every page request (SSR).
 ///
@@ -70,12 +73,17 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
 /// Root application component.
 ///
 /// Provides the Catppuccin shell, the router, and the two top-level routes:
-/// - `/` — live dashboard (placeholder for substep 7)
-/// - `/comparaison` — historic comparison view (placeholder for substep 8)
+/// - `/` — live dashboard
+/// - `/comparaison` — historic comparison view
+///
+/// `signal_state` starts as `NoSignal`; the live-data layer (substep 9) will
+/// upgrade it to `Live` / `Stale` once the SSE stream connects.
 #[must_use]
 #[component]
 pub fn App() -> impl IntoView {
     provide_meta_context();
+    // Static placeholder signal — upgraded to a live SSE-driven signal in substep 9.
+    let signal_state = Signal::stored(SignalLevel::NoSignal);
 
     view! {
         <Stylesheet id="leptos" href="/pkg/meteo-web.css"/>
@@ -83,27 +91,13 @@ pub fn App() -> impl IntoView {
 
         <Router>
             <div class="page-main">
-                <SiteHeader/>
+                <Header signal_state=signal_state/>
                 <Routes fallback=|| view! { <p>"Page introuvable."</p> }>
                     <Route path=StaticSegment("") view=DashboardPage/>
                     <Route path=StaticSegment("comparaison") view=ComparaisonPage/>
                 </Routes>
             </div>
         </Router>
-    }
-}
-
-/// Shared site header with navigation (placeholder — substep 7 replaces this).
-#[component]
-fn SiteHeader() -> impl IntoView {
-    view! {
-        <header class="app-header">
-            <a class="app-title" href="/">"MeteoStation"</a>
-            <nav>
-                <a href="/">"En direct"</a>
-                <a href="/comparaison">"Comparaison"</a>
-            </nav>
-        </header>
     }
 }
 
