@@ -541,6 +541,28 @@ impl Images {
         let h_px = u32::from(area.height).saturating_mul(u32::from(font.height));
         let size = w_px.min(h_px);
 
+        // Centre the square dial within the (wider) panel: ratatui-image's Fit
+        // aligns top-left, so without this the compass hugs the left edge. Compute
+        // the square's cell footprint and offset it to the middle of `area`.
+        let fw = u32::from(font.width.max(1));
+        let fh = u32::from(font.height.max(1));
+        let cells_w = u16::try_from(size.checked_div(fw).unwrap_or(0))
+            .unwrap_or(area.width)
+            .clamp(1, area.width);
+        let cells_h = u16::try_from(size.checked_div(fh).unwrap_or(0))
+            .unwrap_or(area.height)
+            .clamp(1, area.height);
+        let target = ratatui::layout::Rect {
+            x: area
+                .x
+                .saturating_add(area.width.saturating_sub(cells_w) / 2),
+            y: area
+                .y
+                .saturating_add(area.height.saturating_sub(cells_h) / 2),
+            width: cells_w,
+            height: cells_h,
+        };
+
         // `i64::MIN` sentinel: calm or no heading → no needle → same raster.
         let heading_bucket: i64 = if calm || heading_deg.is_none() {
             i64::MIN
@@ -553,7 +575,7 @@ impl Images {
                 (heading_deg.unwrap_or(0.0) * 50.0).round() as i64
             }
         };
-        let key = (heading_bucket, calm, area.width, area.height);
+        let key = (heading_bucket, calm, target.width, target.height);
 
         if self.compass.as_ref().is_none_or(|c| c.key != key) {
             let heading = if calm { None } else { heading_deg };
@@ -567,7 +589,7 @@ impl Images {
         if let Some(cache) = &mut self.compass {
             frame.render_stateful_widget(
                 StatefulImage::<StatefulProtocol>::default(),
-                area,
+                target,
                 &mut cache.proto,
             );
         }

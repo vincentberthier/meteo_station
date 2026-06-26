@@ -39,10 +39,13 @@ fn draw_chart_panel(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let Some(x_win) = series.x_window() else {
-        frame.render_widget(Paragraph::new("en attente\u{2026}"), inner);
-        return;
-    };
+    // Always render a chart image — never a text placeholder. ratatui-image marks
+    // the image's cells as "skip" so the graphics protocol shows through, which
+    // means any text drawn here before the first data frame would never be cleared
+    // from under the image (it would stay stranded on screen). An empty series
+    // therefore renders a bare framed chart (background + gridlines), exactly like
+    // the always-image compass.
+    let x_win = series.x_window().unwrap_or([-Series::WINDOW_SECS, 0.0]);
     let yb = series.y_bounds().unwrap_or((-1.0, 1.0));
     let y_win = model::padded_value_bounds(yb.0, yb.1, spec.floor);
 
@@ -435,6 +438,11 @@ mod tests {
         assert!(
             buf.contains("klx"),
             "buffer should contain 'klx'; got: {buf:?}"
+        );
+        // With data present, no chart shows the empty placeholder.
+        assert!(
+            !buf.contains("attente"),
+            "no chart should show the empty placeholder with data present; got: {buf:?}"
         );
 
         Ok(())
