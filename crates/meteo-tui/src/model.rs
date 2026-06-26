@@ -46,15 +46,47 @@ pub fn fmt_location(lat: Option<f32>, lon: Option<f32>, alt: Option<f32>) -> Str
     }
 }
 
-/// Format luminosity in kilolux.
+/// Threshold (lux) below which luminosity reads in raw lux rather than kilolux.
 ///
-/// Returns `"N/A"` for `None`, otherwise `"{value:.1} klx"`.
+/// Below 1000 lux, kilolux rounds to `0.0 klx` and loses all resolution (a
+/// moonlit night, an overcast dusk, indoor light all collapse to zero); raw lux
+/// keeps the reading meaningful. At/above the threshold kilolux is the readable
+/// unit (daylight runs to ~100 klx).
+pub const LUX_KLX_THRESHOLD: f64 = 1000.0;
+
+/// Format luminosity with an adaptive unit.
+///
+/// Returns `"N/A"` for `None`. Below [`LUX_KLX_THRESHOLD`] the value reads as
+/// `"{lux:.0} lx"`; at or above it as `"{klx:.1} klx"`.
 #[must_use]
-pub fn fmt_lux_klx(lux: Option<f32>) -> String {
+pub fn fmt_lux(lux: Option<f32>) -> String {
     lux.map_or_else(
         || "N/A".to_owned(),
-        |x| format!("{:.1} klx", f64::from(x) / 1000.0),
+        |x| {
+            let v = f64::from(x);
+            if v < LUX_KLX_THRESHOLD {
+                format!("{v:.0} lx")
+            } else {
+                format!("{:.1} klx", v / 1000.0)
+            }
+        },
     )
+}
+
+/// Pick the chart unit, label scale, and precision for a luminosity series given
+/// its peak value (lux).
+///
+/// Below [`LUX_KLX_THRESHOLD`] → `("lx", 1.0, 0)`; at or above → `("klx", 0.001,
+/// 1)`. The peak (not the latest sample) drives the choice so the unit stays
+/// stable as the trace scrolls — a window that captured daylight keeps klx even
+/// after dark, matching the axis range, which also spans that peak.
+#[must_use]
+pub fn lux_chart_unit(peak_lux: f64) -> (&'static str, f64, usize) {
+    if peak_lux < LUX_KLX_THRESHOLD {
+        ("lx", 1.0, 0)
+    } else {
+        ("klx", 0.001, 1)
+    }
 }
 
 /// French 16-point compass label for a heading in degrees.
@@ -378,16 +410,29 @@ pub fn gaussian_smooth(pts: &[(f64, f64)], sigma: f64) -> Vec<(f64, f64)> {
 }
 
 /// Three evenly spaced tick labels for a value axis spanning `bounds` (`[lo, hi]`),
-/// each formatted to `prec` decimals (bottom, middle, top).
+/// formatted (bottom, middle, top).
+///
+/// `min_prec` is the *minimum* decimal precision. When the bottom and top labels
+/// would render identically at that precision — a narrow range over a small
+/// magnitude, e.g. a 0.27–0.34 W load reading both showing `"0.3"` — the
+/// precision is bumped (up to `min_prec + 4`) until they differ, so the axis
+/// always conveys the actual span instead of a flat pair of equal numbers.
 #[must_use]
-pub fn value_axis_labels(bounds: [f64; 2], prec: usize) -> [String; 3] {
+pub fn value_axis_labels(bounds: [f64; 2], min_prec: usize) -> [String; 3] {
     let [lo, hi] = bounds;
     let mid = f64::midpoint(lo, hi);
-    [
-        format!("{lo:.prec$}"),
-        format!("{mid:.prec$}"),
-        format!("{hi:.prec$}"),
-    ]
+    let mut prec = min_prec;
+    loop {
+        let labels = [
+            format!("{lo:.prec$}"),
+            format!("{mid:.prec$}"),
+            format!("{hi:.prec$}"),
+        ];
+        if labels[0] != labels[2] || prec >= min_prec.saturating_add(4) {
+            return labels;
+        }
+        prec = prec.saturating_add(1);
+    }
 }
 
 // grcov exclude start
@@ -782,13 +827,45 @@ mod tests {
         Ok(())
     }
 
-    // --- fmt_lux_klx tests ---
+    // --- fmt_lux / lux_chart_unit tests ---
 
     #[test]
-    fn fmt_lux_klx_divides_by_1000() -> TestResult {
-        // Given / When / Then
-        assert_eq!(fmt_lux_klx(Some(3426.0)), "3.4 klx");
-        assert_eq!(fmt_lux_klx(None), "N/A");
+    fn fmt_lux_switches_unit_at_threshold() -> TestResult {
+        // Given / When / Then — at/above 1000 lux reads in klx
+        assert_eq!(fmt_lux(Some(3426.0)), "3.4 klx");
+        assert_eq!(fmt_lux(Some(1000.0)), "1.0 klx");
+        // Below 1000 lux reads in raw lux (klx would round to 0.0)
+        assert_eq!(fmt_lux(Some(250.0)), "250 lx");
+        assert_eq!(fmt_lux(Some(0.0)), "0 lx");
+        assert_eq!(fmt_lux(None), "N/A");
+        Ok(())
+    }
+
+    #[test]
+    fn lux_chart_unit_picks_lx_below_threshold() -> TestResult {
+        // Given / When / Then — peak below 1000 lux → raw lux, no scaling
+        assert_eq!(lux_chart_unit(800.0), ("lx", 1.0, 0));
+        // Peak at/above → kilolux with a 0.001 label scale
+        assert_eq!(lux_chart_unit(1000.0), ("klx", 0.001, 1));
+        assert_eq!(lux_chart_unit(45_000.0), ("klx", 0.001, 1));
+        Ok(())
+    }
+
+    #[test]
+    fn value_axis_labels_bumps_precision_for_narrow_range() -> TestResult {
+        // Given a narrow sub-watt range that collapses to "0.3"/"0.3" at prec 1
+        // When
+        let labels = value_axis_labels([0.27, 0.34], 1);
+
+        // Then — precision rises until bottom and top labels differ
+        assert_ne!(
+            labels[0], labels[2],
+            "axis ends must be distinct: {labels:?}"
+        );
+        assert_eq!(
+            labels,
+            ["0.27".to_owned(), "0.31".to_owned(), "0.34".to_owned()]
+        );
         Ok(())
     }
 

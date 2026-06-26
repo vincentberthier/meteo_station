@@ -175,18 +175,21 @@ pub fn render_history(
         options.smooth_sigma,
     );
 
-    // scale = 0.001: raw lux stored in app.lux; y-axis labels read klx.
+    // Adaptive unit: the series stores raw lux. A peak below 1000 lux reads in
+    // raw lux (klx would round the whole axis to 0.0); above it reads in klx.
+    let lux_peak = app.lux.y_bounds().map_or(0.0, |(_, hi)| hi);
+    let (lux_unit, lux_scale, lux_prec) = model::lux_chart_unit(lux_peak);
     draw_chart_panel(
         frame,
         images,
         lux_a,
         &plot::PlotSpec {
             title: "Luminosit\u{e9}",
-            unit: "klx",
+            unit: lux_unit,
             color: theme::YELLOW,
-            prec: 1,
+            prec: lux_prec,
             floor: Some(0.0),
-            scale: 0.001,
+            scale: lux_scale,
             marker: options.marker_style,
             show_grid: options.show_grid,
             fill: options.fill,

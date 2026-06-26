@@ -130,7 +130,7 @@ fn render_atmosphere(frame: &mut Frame, area: Rect, app: &AppState) {
         .filter(|_| !diag.veml7700_fault())
         .map_or_else(
             || row_na("Lumin."),
-            |v| row_line("Lumin.", model::fmt_lux_klx(Some(v)), theme::YELLOW),
+            |v| row_line("Lumin.", model::fmt_lux(Some(v)), theme::YELLOW),
         );
     frame.render_widget(Paragraph::new(lux_line), lux_a);
 
