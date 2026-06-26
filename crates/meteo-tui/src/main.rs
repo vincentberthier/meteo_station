@@ -55,6 +55,11 @@ struct Cli {
     /// Show the 60-second heading trail in the wind compass.
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     gust_trail: bool,
+
+    /// Draw the gradient area fill under history traces (dossier look). Off by
+    /// default — in a braille terminal the fill makes spiky signals unreadable.
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    fill: bool,
 }
 
 #[tokio::main]
@@ -65,6 +70,7 @@ async fn main() -> anyhow::Result<()> {
         marker_style: cli.marker_style.into(),
         show_grid: cli.show_grid,
         gust_trail: cli.gust_trail,
+        fill: cli.fill,
     };
 
     // ratatui::init() enables raw mode + alternate screen AND installs a panic

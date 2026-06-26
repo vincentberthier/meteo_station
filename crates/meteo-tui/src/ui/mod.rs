@@ -26,10 +26,15 @@ pub struct Options {
     pub show_grid: bool,
     /// Show the 60-second heading trail in the wind compass.
     pub gust_trail: bool,
+    /// Draw the gradient area fill under history traces. Off by default: in a
+    /// monochrome braille terminal the fill turns spiky signals into an
+    /// unreadable column skyline, so it is opt-in (`--fill`) for the dossier look.
+    pub fill: bool,
 }
 
 impl Options {
-    /// Dossier defaults (dots / grid on / trail on) — also the render smoke-test fixture.
+    /// Test fixture defaults (dots / grid on / trail on / fill on so the fill
+    /// path stays exercised by the render smoke tests).
     #[must_use]
     #[cfg(test)]
     pub const fn default_for_test() -> Self {
@@ -37,6 +42,7 @@ impl Options {
             marker_style: plot::MarkerStyle::Dots,
             show_grid: true,
             gust_trail: true,
+            fill: true,
         }
     }
 }
