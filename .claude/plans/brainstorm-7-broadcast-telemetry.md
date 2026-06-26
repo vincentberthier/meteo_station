@@ -2,7 +2,7 @@
 
 - **Source:** '7 (`.claude/brainstorm/7-ble-broadcast-telemetry.md`)
 - **Date:** 2026-06-25
-- **Status:** Planned
+- **Status:** Done
 
 ## Summary
 
@@ -1031,13 +1031,13 @@ connection_heartbeat)` covers it.
 
 Progress tracking (checked off during `/tyrex:code:implement-light`):
 
-- [ ] 1. Frame v5: `uptime_s` + coarse location (meteo-lib) — host tests green
-- [ ] 2. `Location` wire type + `parse_authorized_write` (PIN) + `SensorReading::Location` (meteo-lib) — host tests green
-- [ ] 3. Aggregator uptime stamp (firmware)
-- [ ] 4. Flash config module + main wiring (firmware) — `just build` green
-- [ ] 5. Firmware broadcast loop + PIN-gated writable reserved service — `just build` green
-- [ ] 6. TUI model (`SignalState`, `fmt_location`) + passive-scan ble.rs — host tests green
-- [ ] 7. TUI app/ui/main wiring + Location row — render smoke green
-- [ ] 8. Scripts: `ble_set_location.sh` + `ble_broadcast_check.sh` rename + `ble_soak.sh` notes
-- [ ] 9. Docs: CLAUDE.md (broadcast, location config, frame v5, GATT, TUI)
-- [ ] `just clippy`, `just format`, `just test`, `just build` all clean before finalize
+- [x] 1. Frame v5: `uptime_s` + coarse location (meteo-lib) — host tests green. v5/38-byte; `scale_loc_i16`/`decode_loc`; 5 new tests. Spec review pass.
+- [x] 2. `Location` wire type + `parse_authorized_write` (PIN) + `SensorReading::Location` (meteo-lib) — host tests green. `location.rs` (357 lines), re-exported; 9 tests. Spec review pass.
+- [x] 3. Aggregator uptime stamp (firmware) — `just build` green; `Instant::now().as_secs() as u32` stamped before `TELEMETRY.signal`. Spec verified inline.
+- [x] 4. Flash config module + main wiring (firmware) — `just build` green. `config.rs` MapStorage (sequential-storage **7.2 API differs from plan sketch — uses `MapStorage` struct, not free fns**); NVS partition lookup; deps added; **workspace rust-version → 1.96** (deps need ≥1.88); fixed a `config.rs` `shadow_reuse` clippy. Spec review pass.
+- [x] 5. Firmware broadcast loop + PIN-gated writable reserved service — `just build` green. `advertise_ext`/`update_adv_data_ext`, mfg-data company 0xFFFF; PIN-gated location write; DIS/notify removed; heartbeat. trouble-host APIs confirmed vs vendored source (`try_accept` → Option; GattEvent 4 variants). Spec review pass.
+- [x] 6. TUI model (`SignalState`, `fmt_location`) + passive-scan ble.rs — host tests green. Additive (old items kept for substep 7); `decode_frame`; 10 tests. Spec review pass.
+- [x] 7. TUI app/ui/main wiring + Location row — render smoke green. Passive-scan migration; old ConnState/LinkEvent/DIS path removed; Location row (Length 14); main.rs already pre-wired `now`. Spec review pass.
+- [x] 8. Scripts: `ble_set_location.sh` + `ble_broadcast_check.sh` rename + `ble_soak.sh` notes — `bash -n` + ShellCheck clean; python3+dbus GATT write + manufacturer-data polling. Spec review pass.
+- [x] 9. Docs: CLAUDE.md (broadcast, location config, frame v5, GATT, TUI) — broadcast/location/v5/passive-scan/scripts reconciled. Spec verified inline.
+- [x] `just clippy`, `just format`, `just test`, `just build` all clean before finalize — 164 tests pass, clippy clean, fmt clean, firmware build OK. Post-implementation review: pass (9/9 substantive).
