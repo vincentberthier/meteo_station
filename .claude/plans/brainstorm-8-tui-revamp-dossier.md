@@ -2,7 +2,7 @@
 
 - **Source:** '8 (`.claude/brainstorm/8-tui-revamp-dossier.md`)
 - **Date:** 2026-06-26
-- **Status:** Planned
+- **Status:** Done
 
 ## Summary
 
@@ -1094,16 +1094,33 @@ gust_trail: cli.gust_trail }`.
 
 Progress tracking (checked during `/tyrex:code:implement-light`):
 
-- [ ] 1 — theme.rs (palette + threshold colours + blend_rgb)
-- [ ] 2 — model.rs extensions (dew point, FR rose, trend, window helpers, formatters)
-- [ ] 3 — ble.rs (FrameEvent + rssi/alias)
-- [ ] 4 — app.rs (state + series + reducer; rain Series; **uptime_s dedup / truncation fix**)
-- [ ] 5 — plot.rs (Canvas plot primitive)
-- [ ] 6 — compass.rs (Canvas compass)
-- [ ] 7 — ui/header.rs
-- [ ] 8 — ui/summary.rs (3 cards)
-- [ ] 9 — ui/diagnostics.rs
-- [ ] 10 — ui/history.rs (6+3 grids)
-- [ ] 11 — ui/mod.rs + main.rs (orchestrator, Options, 10 Hz loop, CLI flags)
-- [ ] Full `just clippy` + `just test` + `just tui-build` green
-- [ ] Manual visual check via `just tui-run`
+- [x] 1 — theme.rs (palette + threshold colours + blend_rgb)
+- [x] 2 — model.rs extensions (dew point, FR rose, trend, window helpers, formatters)
+- [x] 3 — ble.rs (FrameEvent + rssi/alias)
+- [x] 4 — app.rs (state + series + reducer; rain Series; **uptime_s dedup / truncation fix**)
+- [x] 5 — plot.rs (Canvas plot primitive)
+- [x] 6 — compass.rs (Canvas compass)
+- [x] 7 — ui/header.rs
+- [x] 8 — ui/summary.rs (3 cards)
+- [x] 9 — ui/diagnostics.rs
+- [x] 10 — ui/history.rs (6+3 grids)
+- [x] 11 — ui/mod.rs + main.rs (orchestrator, Options, 10 Hz loop, CLI flags)
+- [x] Cleanup — dropped temporary `dead_code` allows + dead table-renderer helpers
+- [x] Full `just clippy` + `just test` + `just tui-build` green
+- [ ] Manual visual check via `just tui-run` (pending — host/hardware visual gate)
+
+### Implementation notes
+
+- Each substep landed as its own jj changeset above `main` (12 changesets:
+  11 substeps + a cleanup), spec-reviewed individually; a post-implementation
+  review confirmed all 12 substantive.
+- **`Options` is passed by value, not `&Options`.** The plan sketched `&Options`,
+  but `Options` is a 3-byte `Copy` struct and clippy's `trivially_copy_pass_by_ref`
+  (under `-D warnings`) rejects the reference form. `render`/`render_summary`/
+  `render_history` all take `Options` by value.
+- **ui submodules were declared in `ui.rs` as each landed** (substeps 7–10) so each
+  new file compiled and ran its tests immediately; substep 11 converted `ui.rs` →
+  `ui/mod.rs`, carrying the declarations and wiring `render()`.
+- Final gate green: `cargo fmt --all -- --check`, `just clippy` (firmware +
+  meteo-lib + meteo-tui), `just test`, `just tui-build`. Only manual `just tui-run`
+  eyeballing remains.
