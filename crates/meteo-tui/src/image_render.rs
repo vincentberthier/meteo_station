@@ -159,6 +159,113 @@ fn draw_polyline(
     }
 }
 
+/// Fill the area under the polyline `pts` down to the baseline value `y0`.
+///
+/// The alpha fades from `peak_alpha` (just beneath the trace) to 0 at the
+/// baseline, giving a soft area-chart look. Consecutive point-pairs whose
+/// temporal gap exceeds 8 % of the x-window are skipped so signal-loss gaps
+/// stay empty. Drawing a staircase envelope (e.g. the gust ceiling) as a filled
+/// area reads as a soft band instead of hard rectangle outlines.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "area fill needs image ref, points, color, peak alpha, and all 4 window/size params"
+)]
+fn fill_under(
+    img: &mut RgbaImage,
+    pts: &[(f64, f64)],
+    color: Rgba<u8>,
+    peak_alpha: f64,
+    x0: f64,
+    x1: f64,
+    y0: f64,
+    y1: f64,
+    w: u32,
+    h: u32,
+) {
+    if pts.len() < 2 {
+        return;
+    }
+    let x_range = x1 - x0;
+    let max_gap = x_range * 0.08;
+    let map = |t: f64, v: f64| to_px(t, v, x0, x1, y0, y1, w, h);
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "image dims come from u16 cell counts × u16 font pixels; never reach i32::MAX"
+    )]
+    let w_i32 = w as i32;
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "image dims come from u16 cell counts × u16 font pixels; never reach i32::MAX"
+    )]
+    let h_i32 = h as i32;
+    let (_, y_bottom_raw) = map(x0, y0);
+    let y_bottom = y_bottom_raw.clamp(0, h_i32.saturating_sub(1));
+
+    for pair in pts.windows(2) {
+        let &[(ta, va), (tb, vb)] = pair else {
+            continue;
+        };
+        let seg_span = tb - ta;
+        if seg_span <= 0.0 || seg_span > max_gap {
+            continue;
+        }
+        let (xa, _) = map(ta, va);
+        let (xb, _) = map(tb, vb);
+        let xi_lo = xa.min(xb).max(0);
+        let xi_hi = xa.max(xb).min(w_i32.saturating_sub(1));
+
+        for xi in xi_lo..=xi_hi {
+            let x_frac = if xa == xb {
+                0.5_f64
+            } else {
+                f64::from(xi.saturating_sub(xa)) / f64::from(xb.saturating_sub(xa))
+            };
+            let v_interp = x_frac.mul_add(vb - va, va);
+            let (_, y_trace_raw) = map(x_frac.mul_add(seg_span, ta), v_interp);
+            let y_trace = y_trace_raw.clamp(0, h_i32.saturating_sub(1));
+
+            let fill_top = y_trace.min(y_bottom);
+            let fill_bot = y_trace.max(y_bottom);
+            let fill_span = fill_bot.saturating_sub(fill_top);
+
+            for yi in fill_top..=fill_bot {
+                let alpha: u8 = if fill_span > 0 {
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        reason = "value in [0, peak_alpha ≤ 255] after multiplication; non-negative"
+                    )]
+                    {
+                        (f64::from(fill_bot.saturating_sub(yi)) / f64::from(fill_span) * peak_alpha)
+                            .round() as u8
+                    }
+                } else {
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        reason = "peak_alpha/2 is within [0, 128]; non-negative"
+                    )]
+                    {
+                        (peak_alpha * 0.5).round() as u8
+                    }
+                };
+                #[expect(
+                    clippy::cast_sign_loss,
+                    reason = "yi ∈ [fill_top, fill_bot] ⊆ [0, h-1]; non-negative"
+                )]
+                let row = yi as u32;
+                #[expect(
+                    clippy::cast_sign_loss,
+                    reason = "xi ∈ [xi_lo, xi_hi] ⊆ [0, w-1]; non-negative"
+                )]
+                let col = xi as u32;
+                let existing = *img.get_pixel(col, row);
+                img.put_pixel(col, row, alpha_over(color, alpha, existing));
+            }
+        }
+    }
+}
+
 // ─── B. Pure chart rasterizer ────────────────────────────────────────────────
 
 /// Rasterize one history chart into a `w × h` pixel image.
@@ -171,10 +278,6 @@ fn draw_polyline(
 ///   LINE (see [`draw_polyline`]).
 /// - **`spec.scale`** is ignored: it only affects axis-label formatting in
 ///   the TUI.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the rasterizer is inherently long; all drawing passes are sequential and splitting would obscure the layering order"
-)]
 pub fn render_chart_image(
     spec: &PlotSpec<'_>,
     pts: &[(f64, f64)],
@@ -203,7 +306,6 @@ pub fn render_chart_image(
 
     let [x0, x1] = x_win;
     let [y0, y1] = y_win;
-    let x_range = x1 - x0;
     let y_range = y1 - y0;
 
     // Thin closure that captures window + size.
@@ -241,83 +343,32 @@ pub fn render_chart_image(
         }
     }
 
-    // 3. True-alpha gradient fill under the trace.
-    //    For each consecutive point-pair whose temporal gap is ≤ 8 % of the
-    //    x-window (so signal-loss gaps stay empty), iterate each x-column and
-    //    fill vertically from the interpolated trace y down to the baseline.
-    //    Alpha peaks at ~40/255 immediately under the trace and fades to 0 at
-    //    the baseline.
-    if spec.fill && pts.len() >= 2 {
-        let max_gap = x_range * 0.08;
-        let fill_fg = rgba(spec.color);
-        let (_, y_bottom_raw) = map(x0, y0);
-        let y_bottom = y_bottom_raw.clamp(0, h_i32.saturating_sub(1));
-
-        for pair in pts.windows(2) {
-            let &[(ta, va), (tb, vb)] = pair else {
-                continue;
-            };
-            let seg_span = tb - ta;
-            if seg_span <= 0.0 || seg_span > max_gap {
-                continue;
-            }
-            let (xa, _) = map(ta, va);
-            let (xb, _) = map(tb, vb);
-            let xi_lo = xa.min(xb).max(0);
-            let xi_hi = xa.max(xb).min(w_i32.saturating_sub(1));
-
-            for xi in xi_lo..=xi_hi {
-                // Linearly interpolate the data value at this x column.
-                let x_frac = if xa == xb {
-                    0.5_f64
-                } else {
-                    f64::from(xi.saturating_sub(xa)) / f64::from(xb.saturating_sub(xa))
-                };
-                let v_interp = x_frac.mul_add(vb - va, va);
-                let (_, y_trace_raw) = map(x_frac.mul_add(seg_span, ta), v_interp);
-                let y_trace = y_trace_raw.clamp(0, h_i32.saturating_sub(1));
-
-                // Fill the column from trace (top, smaller y) to baseline.
-                let fill_top = y_trace.min(y_bottom);
-                let fill_bot = y_trace.max(y_bottom);
-                let fill_span = fill_bot.saturating_sub(fill_top);
-
-                for yi in fill_top..=fill_bot {
-                    // Alpha: 40 at the trace row, 0 at the baseline row.
-                    let alpha: u8 = if fill_span > 0 {
-                        #[expect(
-                            clippy::cast_possible_truncation,
-                            clippy::cast_sign_loss,
-                            reason = "value in [0, 40] after multiplication; non-negative"
-                        )]
-                        {
-                            (f64::from(fill_bot.saturating_sub(yi)) / f64::from(fill_span) * 40.0)
-                                .round() as u8
-                        }
-                    } else {
-                        20
-                    };
-                    #[expect(
-                        clippy::cast_sign_loss,
-                        reason = "yi ∈ [fill_top, fill_bot] ⊆ [0, h-1]; non-negative"
-                    )]
-                    let row = yi as u32;
-                    #[expect(
-                        clippy::cast_sign_loss,
-                        reason = "xi ∈ [xi_lo, xi_hi] ⊆ [0, w-1]; non-negative"
-                    )]
-                    let col = xi as u32;
-                    let existing = *img.get_pixel(col, row);
-                    img.put_pixel(col, row, alpha_over(fill_fg, alpha, existing));
-                }
-            }
-        }
+    // 3. True-alpha gradient fill under the main trace (opt-in, ~40/255 peak).
+    if spec.fill {
+        fill_under(&mut img, pts, rgba(spec.color), 40.0, x0, x1, y0, y1, w, h);
     }
 
-    // 4. Overlay trace (rendered before the main trace so the main sits on top).
+    // 4. Overlay (e.g. the gust ceiling): a translucent filled band down to the
+    //    baseline plus a thin crisp top edge. Filling the staircase envelope as
+    //    an area dissolves the hard rectangle outlines into a soft band, without
+    //    smoothing the overlay's values. Rendered before the main trace so the
+    //    main line sits on top of the band.
     if let Some(ov) = &spec.overlay {
-        let ov_color = rgba(theme::blend_rgb(ov.color, theme::BASE, ov.alpha));
-        draw_polyline(&mut img, ov.points, ov_color, x0, x1, y0, y1, w, h);
+        let band_peak = (ov.alpha * 80.0).clamp(0.0, 255.0);
+        fill_under(
+            &mut img,
+            ov.points,
+            rgba(ov.color),
+            band_peak,
+            x0,
+            x1,
+            y0,
+            y1,
+            w,
+            h,
+        );
+        let edge_color = rgba(theme::blend_rgb(ov.color, theme::BASE, ov.alpha));
+        draw_polyline(&mut img, ov.points, edge_color, x0, x1, y0, y1, w, h);
     }
 
     // 5. Bar dataset — vertical bars in the lower 30 % of the image on their
