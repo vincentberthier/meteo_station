@@ -4,6 +4,7 @@ members = [
     "crates/meteo-firmware",
     "crates/meteo-tui",
     "crates/meteo-chart",
+    "crates/meteo-web",
 ]
 resolver = "3"
 
@@ -75,6 +76,11 @@ codegen-units = 1
 [profile.dev]
 debug = 2
 opt-level = "s" # opt-level 0 firmware is often too large to flash comfortably
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+codegen-units = 1
 
 [profile.gdb]
 inherits = "release"

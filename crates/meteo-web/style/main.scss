@@ -1,0 +1,22 @@
+// MeteoStation web dashboard — Catppuccin Mocha palette skeleton.
+// Full palette, fonts, and component styles are added in substep 6.
+
+// Catppuccin Mocha — base colours used for the skeleton shell.
+$ctp-base: #1e1e2e;   // page background
+$ctp-text: #cdd6f4;   // primary text
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    background-color: $ctp-base;
+    color: $ctp-text;
+    font-family: sans-serif;
+    min-height: 100vh;
+}

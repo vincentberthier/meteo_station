@@ -64,11 +64,14 @@ clippy:
     cargo clippy -p meteo-firmware -- -D warnings
     cargo clippy -p meteo-lib --all-features --all-targets --target {{ host_target }} -- -D warnings
     cargo clippy -p meteo-tui --all-targets --target {{ host_target }} -- -D warnings
+    cargo clippy -p meteo-chart --all-targets --target {{ host_target }} -- -D warnings
+    cargo +nightly clippy -p meteo-web --no-default-features --features ssr --target {{ host_target }} -- -D warnings
 
 [doc('Run tests on host')]
 test:
     cargo nextest run -p meteo-lib --target {{ host_target }}
     cargo nextest run -p meteo-tui --target {{ host_target }}
+    cargo nextest run -p meteo-chart --target {{ host_target }}
 
 # --- Dashboard recipes ---
 
@@ -83,6 +86,27 @@ tui-run *ARGS:
 [doc('Clippy the TUI crate only (fast host-side loop)')]
 tui-clippy:
     cargo clippy -p meteo-tui --all-targets --target {{ host_target }} -- -D warnings
+
+[doc('Build the web dashboard (SSR + wasm via cargo-leptos)')]
+web-build:
+    cargo +nightly leptos build --release -p meteo-web
+
+[doc('Cross-build the web dashboard server for the Raspberry Pi (aarch64)')]
+web-build-pi:
+    cargo +nightly leptos build --release -p meteo-web --bin-target-triple aarch64-unknown-linux-gnu
+
+[doc('Serve the web dashboard locally (hot-reload)')]
+web-serve:
+    cargo +nightly leptos serve -p meteo-web
+
+[doc('Watch + rebuild the web dashboard')]
+web-watch:
+    cargo +nightly leptos watch -p meteo-web
+
+[doc('Clippy the web crate (ssr + hydrate)')]
+web-clippy:
+    cargo +nightly clippy -p meteo-web --no-default-features --features ssr --target {{ host_target }} -- -D warnings
+    cargo +nightly clippy -p meteo-web --no-default-features --features hydrate --target wasm32-unknown-unknown -- -D warnings
 
 # Ignored advisories (unmaintained transitive deps) are documented in
 # .cargo/audit.toml; cargo-audit reads it automatically.
