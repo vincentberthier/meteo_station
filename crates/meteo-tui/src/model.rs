@@ -120,6 +120,22 @@ pub fn power_w(mv: Option<u16>, ma: Option<u16>) -> Option<f64> {
     Some((f64::from(mv?) / 1000.0) * (f64::from(ma?) / 1000.0))
 }
 
+/// Format a (non-`None`) power reading in watts with an adaptive unit and ~3
+/// significant digits.
+///
+/// Below 1 W the value reads as `"{mw:.0} mW"` — a 0.349 W load shows
+/// `"349 mW"` instead of a coarse `"0.3 W"` that hides all variation; at or
+/// above 1 W as `"{w:.2} W"`. The caller keeps the `None` → `"N/A"` rendering so
+/// it can style the absent case distinctly.
+#[must_use]
+pub fn fmt_power(w: f64) -> String {
+    if w.abs() < 1.0 {
+        format!("{:.0} mW", w * 1000.0)
+    } else {
+        format!("{w:.2} W")
+    }
+}
+
 /// Nominal 1S-LiPo energy budget for the crude autonomy estimate (best-effort).
 pub const BATTERY_WH: f64 = 9.6; // 3.7 V × 2.6 Ah
 
@@ -866,6 +882,19 @@ mod tests {
             labels,
             ["0.27".to_owned(), "0.31".to_owned(), "0.34".to_owned()]
         );
+        Ok(())
+    }
+
+    // --- fmt_power tests ---
+
+    #[test]
+    fn fmt_power_switches_unit_at_one_watt() -> TestResult {
+        // Given / When / Then — below 1 W reads in mW with full resolution
+        assert_eq!(fmt_power(0.349), "349 mW");
+        assert_eq!(fmt_power(0.0), "0 mW");
+        // At or above 1 W reads in W with two decimals
+        assert_eq!(fmt_power(1.0), "1.00 W");
+        assert_eq!(fmt_power(2.345), "2.35 W");
         Ok(())
     }
 

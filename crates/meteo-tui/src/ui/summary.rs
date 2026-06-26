@@ -270,7 +270,7 @@ fn render_energie(frame: &mut Frame, area: Rect, app: &AppState) {
                 Style::new().fg(theme::OVERLAY2).add_modifier(Modifier::DIM),
             )
         },
-        |w| Span::styled(format!("{w:.1} W"), Style::new().fg(theme::YELLOW)),
+        |w| Span::styled(model::fmt_power(w), Style::new().fg(theme::YELLOW)),
     );
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -355,7 +355,7 @@ fn render_energie(frame: &mut Frame, area: Rect, app: &AppState) {
                 Style::new().fg(theme::OVERLAY2).add_modifier(Modifier::DIM),
             )
         },
-        |w| Span::styled(format!("{w:.1} W"), Style::new().fg(theme::MAUVE)),
+        |w| Span::styled(model::fmt_power(w), Style::new().fg(theme::MAUVE)),
     );
     frame.render_widget(
         Paragraph::new(Line::from(vec![
