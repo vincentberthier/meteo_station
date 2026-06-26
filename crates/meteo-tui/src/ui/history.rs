@@ -39,50 +39,46 @@ fn draw_chart_panel(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Always render a chart image — never a text placeholder. ratatui-image marks
-    // the image's cells as "skip" so the graphics protocol shows through, which
-    // means any text drawn here before the first data frame would never be cleared
-    // from under the image (it would stay stranded on screen). An empty series
-    // therefore renders a bare framed chart (background + gridlines), exactly like
-    // the always-image compass.
     let x_win = series.x_window().unwrap_or([-Series::WINDOW_SECS, 0.0]);
     let yb = series.y_bounds().unwrap_or((-1.0, 1.0));
     let y_win = model::padded_value_bounds(yb.0, yb.1, spec.floor);
 
-    // Reserve a 1-row bottom strip for x-axis labels; image fills the rest.
-    let [plot_a, xaxis_a] =
+    // Layout: a left gutter for the Y-axis labels and a bottom row for the X-axis
+    // labels, with the image filling the remaining plot area. The gutters are
+    // DISJOINT from the image: the image's anchor cell (which carries the iTerm2
+    // escape) must never be overwritten by a label, or the image vanishes.
+    let [body_a, xaxis_a] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+    let [ygut_a, plot_a] =
+        Layout::horizontal([Constraint::Length(7), Constraint::Min(0)]).areas(body_a);
 
-    // Image rebuilds are gated on `version` (= frame_count) inside Images; unchanged
-    // data redraws are cheap because the cached StatefulProtocol is reused.
+    // The chart image fills `plot_a`. Rebuilds are gated on `version`
+    // (= frame_count) inside Images, so unchanged-data redraws are cheap.
     images.draw_chart(frame, plot_a, id, version, |w, h| {
         image_render::render_chart_image(spec, series.points(), x_win, y_win, w, h)
     });
 
-    // ── Y-axis label overlays (rendered on top of the image) ────────────────
+    // ── Y-axis labels in the left gutter (top = max, bottom = min) ───────────
     let y_win_scaled = [y_win[0] * spec.scale, y_win[1] * spec.scale];
     let [ymin_str, _ymid, ymax_str] = model::value_axis_labels(y_win_scaled, spec.prec);
-
     let ov1 = Style::new().fg(theme::OVERLAY1);
-
-    // Y-max at the top-left of plot_a (1-row tall).
     let ymax_area = Rect {
-        height: plot_a.height.min(1),
-        ..plot_a
+        height: ygut_a.height.min(1),
+        ..ygut_a
     };
     frame.render_widget(Paragraph::new(Span::styled(ymax_str, ov1)), ymax_area);
-    // Y-min at the bottom-left of plot_a (1-row tall).
-    let ymin_y = plot_a.bottom().saturating_sub(1);
     let ymin_area = Rect {
-        y: ymin_y,
-        height: plot_a.height.min(1),
-        ..plot_a
+        y: ygut_a.bottom().saturating_sub(1),
+        height: ygut_a.height.min(1),
+        ..ygut_a
     };
     frame.render_widget(Paragraph::new(Span::styled(ymin_str, ov1)), ymin_area);
 
-    // ── X-axis labels in the bottom strip ────────────────────────────────────
-    let [xl, xm, xr] = Layout::horizontal([Constraint::Fill(1); 3]).areas(xaxis_a);
+    // ── X-axis labels in the bottom row, aligned under the plot area ─────────
     let surf2 = Style::new().fg(theme::SURFACE2);
+    let [_xgut, xlab_a] =
+        Layout::horizontal([Constraint::Length(7), Constraint::Min(0)]).areas(xaxis_a);
+    let [xl, xm, xr] = Layout::horizontal([Constraint::Fill(1); 3]).areas(xlab_a);
     frame.render_widget(Paragraph::new(Span::styled("-10m", surf2)), xl);
     frame.render_widget(Paragraph::new(Span::styled("-5m", surf2)).centered(), xm);
     frame.render_widget(
