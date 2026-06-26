@@ -5,15 +5,23 @@
 // Public API is consumed by the render loop wired in the next step.
 #![allow(dead_code, reason = "wired into the render loop in the next step")]
 
+use core::num::NonZeroU16;
 use std::collections::HashMap;
+use std::io::Cursor;
 
-use image::{DynamicImage, Rgba, RgbaImage, imageops};
+use base64::Engine as _;
+use image::{DynamicImage, ImageFormat, Rgba, RgbaImage, imageops};
 use imageproc::{
     drawing::draw_antialiased_line_segment_mut,
     geometric_transformations::{Interpolation, rotate_about_center},
     pixelops::interpolate,
 };
-use ratatui::{Frame, layout::Rect, style::Color};
+use ratatui::{
+    Frame,
+    buffer::{Buffer, CellDiffOption},
+    layout::Rect,
+    style::Color,
+};
 use ratatui_image::{StatefulImage, picker::Picker, protocol::StatefulProtocol};
 
 use crate::{plot::PlotSpec, theme};
@@ -405,12 +413,19 @@ pub fn render_compass_image(
 
 // ─── D. Protocol cache entries ───────────────────────────────────────────────
 
-/// Cached terminal-graphics protocol for one chart widget.
+/// Cached iTerm2 image escape for one chart widget.
+///
+/// Charts bypass `ratatui-image` and use a hand-rolled iTerm2 inline-image
+/// escape sized in **cells** (`width=<cols>;height=<rows>`, no `px`), so the
+/// terminal scales a small transmitted PNG up to fill the panel. `ratatui-image`
+/// hard-codes `width=<n>px`, which forces the transmitted image to the panel's
+/// full pixel size — ~1656 px on `HiDPI`, nine of which the terminal drops.
 struct ChartCache {
     /// `(data_version, area_width_cells, area_height_cells)`.
     /// Invalidated when data changes or the widget area changes size.
     key: (u64, u16, u16),
-    proto: StatefulProtocol,
+    /// The full iTerm2 escape sequence (already base64-encoded) for the first cell.
+    escape: String,
 }
 
 /// Cached terminal-graphics protocol for the compass widget.
@@ -441,10 +456,59 @@ pub struct Images {
     compass: Option<CompassCache>,
 }
 
-/// Longest-side pixel cap for rasterized chart images. Full `HiDPI` panels reach
-/// ~1656 px; nine such images overwhelm the terminal's image budget, so charts
-/// are rasterized no larger than this and upscaled to the cell area on display.
-const CHART_MAX_DIM: u32 = 600;
+/// Longest-side pixel cap for the *transmitted* chart PNG. The terminal scales
+/// this up to fill the panel's cell box, so it need not match the panel's full
+/// `HiDPI` pixel size (~1656 px) — nine of those overwhelm the terminal's image
+/// budget. This keeps each transmitted texture small while the display fills.
+const CHART_MAX_DIM: u32 = 800;
+
+/// PNG-encode `img` and wrap it in an iTerm2 inline-image escape sized in CELLS.
+///
+/// The key difference from `ratatui-image`: `width`/`height` are given in **cells**
+/// (`width=<cols>;height=<rows>`, no `px`), so the terminal scales the transmitted
+/// PNG up to fill `cols × rows` cells. We can therefore transmit a small PNG and
+/// still fill a `HiDPI` panel. `preserveAspectRatio=0` stretches to the cell box
+/// exactly (the PNG already carries the panel's pixel aspect, so no distortion);
+/// `doNotMoveCursor=1` keeps the cursor put so ratatui's layout is undisturbed.
+fn encode_iterm2_cells(img: &RgbaImage, cols: u16, rows: u16) -> String {
+    let mut png: Vec<u8> = Vec::new();
+    if DynamicImage::ImageRgba8(img.clone())
+        .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+        .is_err()
+    {
+        return String::new();
+    }
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+    format!(
+        "\x1b]1337;File=inline=1;size={};width={cols};height={rows};preserveAspectRatio=0;doNotMoveCursor=1:{b64}\x07",
+        png.len(),
+    )
+}
+
+/// Write a pre-built terminal-image `escape` into `area` of the buffer.
+///
+/// Mirrors `ratatui-image`'s integration: the escape goes in the first cell (forced
+/// to one column wide so ratatui doesn't pad it), and every other cell in `area` is
+/// marked `Skip` so ratatui's diff renderer leaves the image region untouched.
+fn write_image_cells(buf: &mut Buffer, area: Rect, escape: &str) {
+    if escape.is_empty() {
+        return;
+    }
+    if let Some(cell) = buf.cell_mut((area.x, area.y)) {
+        cell.set_symbol(escape)
+            .set_diff_option(CellDiffOption::ForcedWidth(NonZeroU16::MIN));
+    }
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            if x == area.left() && y == area.top() {
+                continue;
+            }
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_diff_option(CellDiffOption::Skip);
+            }
+        }
+    }
+}
 
 /// Append a diagnostic line to the debug log when `METEO_TUI_DEBUG` is set in
 /// the environment. No-op otherwise (the TUI owns the terminal, so stderr is
@@ -528,13 +592,15 @@ impl Images {
     ) where
         F: FnOnce(u32, u32) -> RgbaImage,
     {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
         let font = self.picker.font_size();
         let raw_w = u32::from(area.width).saturating_mul(u32::from(font.width));
         let raw_h = u32::from(area.height).saturating_mul(u32::from(font.height));
-        // Cap the raster resolution. On HiDPI terminals a full-size panel is
-        // ~1656×696 px; nine of those is ~10 MP of image escapes per frame, which
-        // terminals silently drop. A line chart reads fine rasterized smaller and
-        // upscaled by the resize protocol to the cell area.
+        // Transmit resolution: keep the panel's pixel ASPECT (so the terminal's
+        // stretch-to-cells doesn't distort) but cap the longest side. The terminal
+        // scales this small PNG up to fill the panel, so it need not be panel-sized.
         let longest = raw_w.max(raw_h).max(1);
         let (w_px, h_px) = if longest > CHART_MAX_DIM {
             (
@@ -556,28 +622,20 @@ impl Images {
 
         if self.charts.get(id).is_none_or(|c| c.key != key) {
             let img = build(w_px, h_px);
+            let escape = encode_iterm2_cells(&img, area.width, area.height);
             debug_log(&format!(
-                "chart[{id}] build px={w_px}x{h_px} img={}x{} area={}x{}",
+                "chart[{id}] img={}x{} cells={}x{} esc_bytes={}",
                 img.width(),
                 img.height(),
                 area.width,
                 area.height,
+                escape.len(),
             ));
-            let proto = self
-                .picker
-                .new_resize_protocol(DynamicImage::ImageRgba8(img));
-            self.charts.insert(id, ChartCache { key, proto });
+            self.charts.insert(id, ChartCache { key, escape });
         }
 
-        if let Some(cache) = self.charts.get_mut(id) {
-            frame.render_stateful_widget(
-                StatefulImage::<StatefulProtocol>::default(),
-                area,
-                &mut cache.proto,
-            );
-            if let Some(r) = cache.proto.last_encoding_result() {
-                debug_log(&format!("chart[{id}] encode={r:?}"));
-            }
+        if let Some(cache) = self.charts.get(id) {
+            write_image_cells(frame.buffer_mut(), area, &cache.escape);
         }
     }
 

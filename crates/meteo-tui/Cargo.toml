@@ -23,6 +23,7 @@ uuid = { version = "1", features = ["macro-diagnostics"] }  # uuid! macro suppor
 ratatui-image = "11"
 image = { version = "0.25", default-features = false, features = ["png"] }
 imageproc = { version = "0.25", default-features = false }
+base64 = "0.22"  # encode chart PNGs for the custom cell-sized iTerm2 image escape
 
 [dev-dependencies]
 test-log = { workspace = true }
