@@ -19,7 +19,10 @@ pub const MAX_DEVICES: usize = (LAST_ADDR - FIRST_ADDR) as usize + 1;
 /// address is recorded as present, and addresses that NAK (no device) are skipped.
 /// This drives real bus traffic, so call it once at boot before the per-sensor
 /// tasks take the bus mutex — never concurrently with them.
-pub async fn scan<I: I2c>(i2c: &mut I) -> Vec<u8, MAX_DEVICES> {
+pub async fn scan<I>(i2c: &mut I) -> Vec<u8, MAX_DEVICES>
+where
+    I: I2c,
+{
     let mut found = Vec::new();
     for addr in FIRST_ADDR..=LAST_ADDR {
         let mut buf = [0_u8; 1];
