@@ -52,6 +52,7 @@ use leptos_router::{
 
 use components::header::{Header, SignalLevel};
 use pages::all_panels::AllPanelsPage;
+use pages::comparison::ComparisonPage;
 
 /// HTML shell returned for every page request (SSR).
 ///
@@ -100,21 +101,10 @@ pub fn App() -> impl IntoView {
                 <Header signal_state=signal_state/>
                 <Routes fallback=|| view! { <p>"Page introuvable."</p> }>
                     <Route path=StaticSegment("") view=AllPanelsPage/>
-                    <Route path=StaticSegment("comparaison") view=ComparaisonPage/>
+                    <Route path=StaticSegment("comparaison") view=ComparisonPage/>
                 </Routes>
             </div>
         </Router>
-    }
-}
-
-/// Historic comparison placeholder (route `/comparaison`).
-#[component]
-fn ComparaisonPage() -> impl IntoView {
-    view! {
-        <div class="content-area">
-            <h1 class="font-mono color-peach">"Comparaison historique"</h1>
-            <p class="color-subtext">"Les graphiques comparatifs s'afficheront ici."</p>
-        </div>
     }
 }
 
