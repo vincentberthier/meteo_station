@@ -80,7 +80,7 @@ fn render_atmosphere(frame: &mut Frame, area: Rect, app: &AppState) {
     );
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("Air  ", Style::new().fg(theme::OVERLAY2)),
+            Span::styled(format!("{:<11}", "Air"), Style::new().fg(theme::OVERLAY2)),
             Span::styled(temp_str, Style::new().fg(temp_fg)),
             Span::styled(" \u{00b0}C", Style::new().fg(theme::OVERLAY2)),
         ])),
