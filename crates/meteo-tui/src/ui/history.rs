@@ -197,7 +197,8 @@ pub fn render_history(
         &plot::PlotSpec {
             title: "Pression",
             unit: "hPa",
-            color: theme::TEAL,
+            // BLUE (not TEAL) so pressure is clearly distinct from the cyan wind line.
+            color: theme::BLUE,
             prec: 1,
             floor: None,
             scale: 1.0,
@@ -227,8 +228,10 @@ pub fn render_history(
         fill: options.fill,
         overlay: Some(plot::Overlay {
             points: &gust_pts,
+            // TEAL at a higher alpha so the gust envelope reads clearly above the
+            // SKY wind line instead of washing out into it.
             color: theme::TEAL,
-            alpha: 0.32,
+            alpha: 0.55,
         }),
         bars: None,
     };
@@ -332,7 +335,7 @@ pub fn render_history(
         images,
         load_a,
         &plot::PlotSpec {
-            title: "Puissance charge",
+            title: "Puissance utilis\u{e9}e",
             unit: "W",
             color: theme::MAUVE,
             prec: 1,
