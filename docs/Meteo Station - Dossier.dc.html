@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#1e1e2e; --body:#3a3a48; --muted:#6c7086; --faint:#8b8b9a;
+    --hair:#e6e6ee; --hair2:#f0f0f5; --accent:#5566a8; --bg:#ffffff;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --sans:'IBM Plex Sans',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--body);font-family:var(--sans);font-size:15px;line-height:1.62;-webkit-font-smoothing:antialiased;}
+  .doc{box-sizing:border-box;max-width:8.5in;margin:0 auto;background:inherit;padding:54px clamp(24px,5vw,0.78in) 96px;}
+  .doc-frame{width:100%;border-collapse:collapse;}
+  .doc-frame td{padding:0;}
+  .hdr-space,.ftr-space{display:none;}
+
+  h1{font-family:var(--sans);font-weight:700;font-size:34px;line-height:1.12;letter-spacing:-.01em;color:var(--ink);margin:6px 0 10px;text-wrap:balance;}
+  h2{font-family:var(--mono);font-weight:600;font-size:19px;letter-spacing:-.01em;color:var(--ink);margin:46px 0 4px;text-wrap:balance;}
+  h3{font-family:var(--mono);font-weight:600;font-size:14px;color:var(--ink);margin:26px 0 6px;letter-spacing:.01em;}
+  p{margin:9px 0;text-wrap:pretty;}
+  ul,ol{margin:9px 0;padding-left:20px;}
+  li{margin:5px 0;text-wrap:pretty;}
+  b,strong{color:var(--ink);font-weight:600;}
+  code,.mono{font-family:var(--mono);font-size:.86em;}
+  a{color:var(--accent);text-decoration:none;}
+
+  .eyebrow{font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);}
+  .lead{font-size:16.5px;line-height:1.6;color:#4a4a58;margin:12px 0 0;}
+  .sectnum{font-family:var(--mono);color:var(--accent);font-weight:600;margin-right:10px;}
+  .rule{height:2px;background:var(--ink);border:0;margin:18px 0 0;}
+  .h2wrap{border-top:1px solid var(--hair);padding-top:8px;}
+
+  .toc{font-family:var(--mono);font-size:13px;line-height:1.95;color:var(--muted);margin:18px 0 0;columns:2;column-gap:34px;}
+  .toc b{color:var(--accent);font-weight:600;}
+
+  figure{margin:18px 0 6px;}
+  figure img{width:100%;display:block;border:1px solid #2a2a3c;border-radius:6px;background:#1e1e2e;}
+  figcaption{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:7px;letter-spacing:.01em;}
+
+  .palette{display:grid;grid-template-columns:repeat(auto-fill,minmax(196px,1fr));gap:10px;margin:14px 0 4px;}
+  .swatch{display:flex;gap:11px;align-items:center;border:1px solid var(--hair);border-radius:7px;padding:8px 10px;}
+  .chip{width:34px;height:34px;border-radius:6px;flex:none;box-shadow:inset 0 0 0 1px rgba(0,0,0,.10);}
+  .swatch .t{display:flex;flex-direction:column;line-height:1.32;min-width:0;}
+  .swatch .hex{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--ink);}
+  .swatch .nm{font-size:12.5px;font-weight:600;color:#4a4a58;}
+  .swatch .ro{font-size:11.5px;color:var(--muted);}
+
+  table.spec{width:100%;border-collapse:collapse;margin:14px 0 6px;font-size:13.5px;}
+  table.spec th{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);text-align:left;font-weight:600;border-bottom:1.5px solid var(--ink);padding:6px 12px 6px 0;vertical-align:bottom;}
+  table.spec td{border-bottom:1px solid var(--hair);padding:9px 12px 9px 0;vertical-align:top;}
+  table.spec td:first-child{font-family:var(--mono);font-size:12.5px;color:var(--ink);white-space:nowrap;}
+  table.spec tr td:last-child{padding-right:0;}
+
+  .tag{display:inline-block;font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.04em;padding:1px 6px;border-radius:4px;vertical-align:middle;}
+  .tag.spec{background:#eef0fb;color:#4655a0;}
+  .tag.mock{background:#f1f1f4;color:#74748a;}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:middle;margin-right:4px;box-shadow:0 0 0 1px rgba(0,0,0,.06);}
+  .swsq{display:inline-block;width:10px;height:10px;border-radius:3px;vertical-align:middle;margin-right:5px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.12);}
+
+  .panel{border:1px solid var(--hair);border-radius:9px;padding:16px 18px;margin:14px 0;}
+  .panel h3{margin-top:0;display:flex;align-items:center;gap:9px;}
+  .panel .role{font-size:14px;color:#4a4a58;margin:2px 0 10px;}
+  .kv{display:grid;grid-template-columns:130px 1fr;gap:4px 14px;font-size:13.5px;}
+  .kv dt{font-family:var(--mono);font-size:12px;color:var(--muted);}
+  .kv dd{margin:0;color:#3a3a48;}
+  .kv dt:not(:first-of-type){border-top:1px solid var(--hair2);padding-top:7px;}
+  .kv dd:not(:first-of-type){border-top:1px solid var(--hair2);padding-top:7px;}
+
+  .callout{border:1px solid var(--hair);border-left:3px solid var(--accent);border-radius:0 7px 7px 0;padding:11px 15px;margin:14px 0;background:#fafaff;font-size:13.5px;}
+  .callout b{color:var(--ink);}
+  .lang{font-family:var(--mono);font-size:11px;color:var(--faint);}
+
+  @page{size:letter;margin:0;}
+  @media print{
+    html{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    html,body{margin:0;padding:0;}
+    .doc{max-width:none!important;margin:0!important;padding:0 0.7in!important;box-shadow:none!important;}
+    .hdr-space,.ftr-space{display:table-cell;height:0.7in;}
+    h1,h2,h3,h4{break-after:avoid;}
+    figure,pre,blockquote,img,tr,.panel,.swatch,.callout{break-inside:avoid;}
+    p,li{orphans:3;widows:3;}
+    .screen-only{display:none!important;}
+  }
+</style>
+</helmet>
+<main class="doc">
+  <table class="doc-frame" role="presentation">
+    <thead><tr><td class="hdr-space"></td></tr></thead>
+    <tbody><tr><td>
+
+      <div class="eyebrow">Design dossier · TUI · Rust + Ratatui</div>
+      <h1>Weather station “rooftop-01”</h1>
+      <hr class="rule">
+      <p class="lead">Terminal UI for a self-contained weather station. A summary band on top, a diagnostics bar kept separate from the data, then a 10-minute history. This document fixes the grid, palette, dynamic rules and a panel-by-panel reference for the Rust port.</p>
+      <p class="lang">Note — the interface ships in French; on-screen strings are quoted verbatim (e.g. « En direct »). All explanatory text here is English.</p>
+
+      <div class="toc">
+        <div><b>1</b> &nbsp;Design principles</div>
+        <div><b>2</b> &nbsp;Colour system</div>
+        <div><b>3</b> &nbsp;Dynamic behaviour</div>
+        <div><b>4</b> &nbsp;Panel-by-panel reference</div>
+        <div><b>5</b> &nbsp;Options &amp; implementation notes</div>
+      </div>
+
+      <figure>
+        <img src="dossier/img/01-sec.png" alt="Dashboard overview">
+        <figcaption>Fig. 1 — Summary band: header, Atmosphere card, Wind compass, Power card.</figcaption>
+      </figure>
+
+      <!-- ============ 1 ============ -->
+      <div class="h2wrap"></div>
+      <h2><span class="sectnum">1</span>Design principles</h2>
+      <p>The screen reads top to bottom in four tiers of information, most immediate first:</p>
+      <ol>
+        <li><b>Header</b> — station identity, clock, link state.</li>
+        <li><b>Summary band</b> — the <i>instantaneous</i> values grouped into three cards: Atmosphere, Wind (compass), Power.</li>
+        <li><b>Diagnostics bar</b> — hardware health, <b>deliberately separated from the measurements</b>.</li>
+        <li><b>History</b> — two 3-column grids: Sensors (6) and Power (3), 10-minute sliding window.</li>
+      </ol>
+      <p>Cross-cutting rules:</p>
+      <ul>
+        <li><b>Native terminal aesthetic.</b> One monospace face (JetBrains&nbsp;Mono); bordered panels with the title inset into the top rule — Ratatui’s <code>Block</code> convention.</li>
+        <li><b>One hue per quantity.</b> Each metric keeps its colour everywhere — value, plot, axis label. Colour carries meaning, never decoration.</li>
+        <li><b>“Braille” traces.</b> Curves drawn as dotted point fields like <code>Marker::Braille</code>, with a faint gradient fill under the line (13&nbsp;%→0).</li>
+        <li><b>Restrained chrome.</b> Desaturated backgrounds, faint separators, layered greys; vivid colour is reserved for data and alerts.</li>
+        <li><b>Adaptive.</b> The summary cards reflow; the history stays at 3 columns.</li>
+      </ul>
+
+      <!-- ============ 2 ============ -->
+      <div class="h2wrap"></div>
+      <h2><span class="sectnum">2</span>Colour system</h2>
+      <p><b>Catppuccin Mocha</b> palette. Every value is a direct <code>Color::Rgb</code>.</p>
+
+      <h3>Backgrounds &amp; chrome</h3>
+      <div class="palette">
+        <div class="swatch"><span class="chip" style="background:#1e1e2e"></span><div class="t"><span class="hex">#1e1e2e</span><span class="nm">Base</span><span class="ro">App background</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#181825"></span><div class="t"><span class="hex">#181825</span><span class="nm">Mantle</span><span class="ro">Panel fill</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#11111b"></span><div class="t"><span class="hex">#11111b</span><span class="nm">Crust</span><span class="ro">Tracks &amp; wells (gauge, hub)</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#2a2a3c"></span><div class="t"><span class="hex">#2a2a3c</span><span class="nm">Border</span><span class="ro">Panel outline</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#313244"></span><div class="t"><span class="hex">#313244</span><span class="nm">Surface0</span><span class="ro">Chip frame · separators</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#26263a"></span><div class="t"><span class="hex">#26263a</span><span class="nm">Hairline</span><span class="ro">Internal dotted rules</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#45475a"></span><div class="t"><span class="hex">#45475a</span><span class="nm">Surface1</span><span class="ro">Minor compass ticks</span></div></div>
+      </div>
+
+      <h3>Text levels</h3>
+      <div class="palette">
+        <div class="swatch"><span class="chip" style="background:#cdd6f4"></span><div class="t"><span class="hex">#cdd6f4</span><span class="nm">Text</span><span class="ro">Values · clock</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#bac2de"></span><div class="t"><span class="hex">#bac2de</span><span class="nm">Subtext1</span><span class="ro">Sensor names</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#a6adc8"></span><div class="t"><span class="hex">#a6adc8</span><span class="nm">Subtext0</span><span class="ro">Panel titles · cardinals</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#9399b2"></span><div class="t"><span class="hex">#9399b2</span><span class="nm">Overlay2</span><span class="ro">Section labels · units</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#7f849c"></span><div class="t"><span class="hex">#7f849c</span><span class="nm">Overlay1</span><span class="ro">Min/max axes · “maint.”</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#6c7086"></span><div class="t"><span class="hex">#6c7086</span><span class="nm">Overlay0</span><span class="ro">Dimmed labels</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#585b70"></span><div class="t"><span class="hex">#585b70</span><span class="nm">Surface2</span><span class="ro">X axis · faint strokes</span></div></div>
+      </div>
+
+      <h3>Per-quantity colours</h3>
+      <div class="palette">
+        <div class="swatch"><span class="chip" style="background:#fab387"></span><div class="t"><span class="hex">#fab387</span><span class="nm">Peach</span><span class="ro">Air temperature</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#b4befe"></span><div class="t"><span class="hex">#b4befe</span><span class="nm">Lavender</span><span class="ro">Sky temperature</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#94e2d5"></span><div class="t"><span class="hex">#94e2d5</span><span class="nm">Teal</span><span class="ro">Pressure · batt. gauge</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#74c7ec"></span><div class="t"><span class="hex">#74c7ec</span><span class="nm">Sapphire</span><span class="ro">Humidity</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#f9e2af"></span><div class="t"><span class="hex">#f9e2af</span><span class="nm">Yellow</span><span class="ro">Luminosity · Solar</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#89b4fa"></span><div class="t"><span class="hex">#89b4fa</span><span class="nm">Blue</span><span class="ro">Rain</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#89dceb"></span><div class="t"><span class="hex">#89dceb</span><span class="nm">Sky</span><span class="ro">Wind · compass</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#a6e3a1"></span><div class="t"><span class="hex">#a6e3a1</span><span class="nm">Green</span><span class="ro">Battery · charging · OK</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#cba6f7"></span><div class="t"><span class="hex">#cba6f7</span><span class="nm">Mauve</span><span class="ro">Load (draw)</span></div></div>
+      </div>
+
+      <h3>States &amp; status</h3>
+      <div class="palette">
+        <div class="swatch"><span class="chip" style="background:#a6e3a1"></span><div class="t"><span class="hex">#a6e3a1</span><span class="nm">Green — OK</span><span class="ro">Healthy sensor · charging</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#f9e2af"></span><div class="t"><span class="hex">#f9e2af</span><span class="nm">Yellow — Warn</span><span class="ro">Warning threshold</span></div></div>
+        <div class="swatch"><span class="chip" style="background:#f38ba8"></span><div class="t"><span class="hex">#f38ba8</span><span class="nm">Red — Fault</span><span class="ro">Fault · North marker</span></div></div>
+      </div>
+
+      <!-- ============ 3 ============ -->
+      <div class="h2wrap"></div>
+      <h2><span class="sectnum">3</span>Dynamic behaviour</h2>
+      <p>Which events change what. <span class="tag mock">MOCK</span> = current demo state; <span class="tag spec">WIRE UP</span> = recommended rule for the embedded build. Thresholds are starting points to tune.</p>
+
+      <h3>Global rules</h3>
+      <table class="spec">
+        <thead><tr><th style="width:34%">Trigger</th><th style="width:28%">Element</th><th>Effect</th></tr></thead>
+        <tbody>
+          <tr><td>New sample (1&nbsp;Hz)</td><td>All plots</td><td>Scroll one step left; rightmost point = now. Y axis auto-fits (16&nbsp;% padding).</td></tr>
+          <tr><td>Packet received</td><td>“dernier paquet” · “En direct”</td><td>Age counter reset to ~0; the « En direct » dot pulses (1.6&nbsp;s).</td></tr>
+          <tr><td>Clock tick</td><td>Header</td><td>Timestamp <code>YYYY-MM-DD HH:MM:SS</code> refreshed.</td></tr>
+          <tr><td>Link lost <span class="tag spec">WIRE UP</span></td><td>“En direct” · BLE chip</td><td>If last packet &gt; threshold: switch to « Hors&nbsp;ligne » (red dot, no pulse); BLE chip → red.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Targeted examples</h3>
+      <table class="spec">
+        <thead><tr><th style="width:30%">Element</th><th>Rule</th></tr></thead>
+        <tbody>
+          <tr><td>Battery level</td><td>Gauge <b>width</b> = state of charge (%). <span class="tag spec">WIRE UP</span> colour gauge &amp; % by threshold: <span class="swsq" style="background:#a6e3a1"></span>≥&nbsp;50&nbsp;% green · <span class="swsq" style="background:#f9e2af"></span>20–49&nbsp;% yellow · <span class="swsq" style="background:#f38ba8"></span>&lt;&nbsp;20&nbsp;% red. <span class="tag mock">MOCK</span> fixed teal→green gradient.</td></tr>
+          <tr><td>Battery flow direction</td><td>Status line: “<span style="color:#1e1e2e">▲ en charge · +net&nbsp;W</span>” green if net&nbsp;&gt;&nbsp;0; “▼ décharge · −net&nbsp;W · ~remaining” red if net&nbsp;&lt;&nbsp;0.</td></tr>
+          <tr><td>Air-temp trend</td><td>Trend arrow “▲ +0.3&nbsp;°C / 10m” = Δ over 10&nbsp;min. <span class="swsq" style="background:#a6e3a1"></span>▲ green if rising · ▼ peach if falling · “stable” if |Δ|&nbsp;&lt;&nbsp;0.1&nbsp;°C.</td></tr>
+          <tr><td>Air temp (big number)</td><td>Always <span class="swsq" style="background:#fab387"></span>peach. No threshold colour: it’s a reading, not an alert.</td></tr>
+          <tr><td>BLE RSSI</td><td>Chip colour by signal: <span class="swsq" style="background:#a6e3a1"></span>≥&nbsp;−70 · <span class="swsq" style="background:#f9e2af"></span>−70…−90 · <span class="swsq" style="background:#f38ba8"></span>&lt;&nbsp;−90&nbsp;dBm. (−81 → yellow.)</td></tr>
+          <tr><td>Last packet</td><td><span class="swsq" style="background:#a6e3a1"></span>&lt;&nbsp;2&nbsp;s normal · <span class="swsq" style="background:#f9e2af"></span>2–10&nbsp;s yellow · <span class="swsq" style="background:#f38ba8"></span>&gt;&nbsp;10&nbsp;s red (link likely down).</td></tr>
+          <tr><td>Sensor health</td><td>Chip dot green/yellow/red. <span class="tag spec">WIRE UP</span> on fault, the related Atmosphere reading shows dimmed “N/A”.</td></tr>
+          <tr><td>Calm wind (&lt; 0.3 m/s)</td><td><span class="tag spec">WIRE UP</span> hide needle / show “calme”. Otherwise the needle points to heading and the trail draws 60&nbsp;s of history.</td></tr>
+          <tr><td>Rain = 0</td><td>Bars give way to a faint tick on the baseline.</td></tr>
+        </tbody>
+      </table>
+
+      <figure>
+        <img src="dossier/img/02-sec.png" alt="Diagnostics bar">
+        <figcaption>Fig. 2 — Diagnostics bar: sensor chips (status dot), then actif / échantillons / dernier paquet and the ok&nbsp;·&nbsp;alerte&nbsp;·&nbsp;panne legend.</figcaption>
+      </figure>
+
+      <!-- ============ 4 ============ -->
+      <div class="h2wrap"></div>
+      <h2><span class="sectnum">4</span>Panel-by-panel reference</h2>
+
+      <div class="panel">
+        <h3>Header</h3>
+        <div class="role">Identity / status band, bottom rule <code>#2a2a3c</code>.</div>
+        <dl class="kv">
+          <dt>Left</dt><dd><code>◆</code> (Sky) + <b>rooftop-01</b> · app/fw · GPS coordinates.</dd>
+          <dt>Right</dt><dd>Clock (Subtext1) · <span class="dot" style="background:#a6e3a1"></span><b>« En direct »</b> (pulsing green dot) · rate “1&nbsp;Hz”.</dd>
+          <dt>Dynamic</dt><dd>Clock on tick; see the “link lost” rule.</dd>
+        </dl>
+      </div>
+
+      <div class="panel">
+        <h3>Atmosphere card — « ATMOSPHÈRE »</h3>
+        <div class="role">Instantaneous atmospheric readings.</div>
+        <dl class="kv">
+          <dt>Hero</dt><dd>“Air” + big number <span class="swsq" style="background:#fab387"></span>peach, dimmed °C unit; 10-min trend top-right.</dd>
+          <dt>Rows</dt><dd>« Humidité » <span class="swsq" style="background:#74c7ec"></span>· « Pression » <span class="swsq" style="background:#94e2d5"></span>· « Temp. ciel » <span class="swsq" style="background:#b4befe"></span>· « Lumin. » <span class="swsq" style="background:#f9e2af"></span>· « Pluie » <span class="swsq" style="background:#89b4fa"></span>· « Pt rosée » <span class="swsq" style="background:#9399b2"></span>.</dd>
+          <dt>Labels</dt><dd>Name in Overlay0, value in its quantity colour, unit in Surface2.</dd>
+          <dt>Units</dt><dd>%HR · hPa · °C · klx · mm/h.</dd>
+        </dl>
+      </div>
+
+      <div class="panel">
+        <h3>Wind compass — « VENT »</h3>
+        <div class="role">Heading, speed and gust history on a dial.</div>
+        <dl class="kv">
+          <dt>Dial</dt><dd>Ring <code>#313244</code>, inner ring <code>#26263a</code>, hub <code>#11111b</code>. Cardinals <b>N&nbsp;E&nbsp;S&nbsp;O</b>; <span class="swsq" style="background:#f38ba8"></span>N in red to orient, others in Overlay1.</dd>
+          <dt>Ticks</dt><dd>Every 45° long (Overlay0), every 15° short (Surface1).</dd>
+          <dt>Needle</dt><dd>Filled triangle <span class="swsq" style="background:#89dceb"></span>Sky pointing to heading; tail <code>#3d4d5e</code> opposite.</dd>
+          <dt>Trail</dt><dd>~22 latest headings (≈ 60&nbsp;s) as Sky dots whose opacity fades with age.</dd>
+          <dt>Centre</dt><dd>Speed (Sky) · m/s · heading degrees + FR 16-point rose (Subtext0) · « rafale » (gust, <span class="swsq" style="background:#94e2d5"></span>Teal).</dd>
+          <dt>16-pt rose</dt><dd><code>N NNE NE ENE E ESE SE SSE S SSO SO OSO O ONO NO NNO</code></dd>
+        </dl>
+      </div>
+
+      <div class="panel">
+        <h3>Power card — « ÉNERGIE »</h3>
+        <div class="role">Instant solar / battery / load balance.</div>
+        <dl class="kv">
+          <dt>« Solaire »</dt><dd><span class="dot" style="background:#f9e2af"></span>Power W (Yellow); sub-line V&nbsp;·&nbsp;mA dimmed.</dd>
+          <dt>« Batterie »</dt><dd><span class="dot" style="background:#a6e3a1"></span>% (Green) + gauge: track <code>#11111b</code> / frame <code>#313244</code>, fill = SoC; flow status line (see §3).</dd>
+          <dt>« Charge »</dt><dd><span class="dot" style="background:#cba6f7"></span>Power W (Mauve); sub-line mA · activity.</dd>
+        </dl>
+      </div>
+
+      <div class="panel">
+        <h3>Diagnostics bar — « DIAGNOSTIC »</h3>
+        <div class="role">Hardware health, isolated from the readings.</div>
+        <dl class="kv">
+          <dt>Sensor chips</dt><dd>Status dot + name (Subtext1). <span class="dot" style="background:#a6e3a1"></span>ok · <span class="dot" style="background:#f9e2af"></span>alerte · <span class="dot" style="background:#f38ba8"></span>panne, with a soft glow.</dd>
+          <dt>BLE link</dt><dd>Broadcast advertising; RSSI coloured by threshold (see §3).</dd>
+          <dt>Right block</dt><dd><b>« actif »</b> (uptime) · <b>« échantillons »</b> · <b>« dernier paquet »</b> (live) · ok&nbsp;/&nbsp;alerte&nbsp;/&nbsp;panne legend.</dd>
+        </dl>
+      </div>
+
+      <div class="panel">
+        <h3>Sensors grid — « CAPTEURS » · 6 plots</h3>
+        <div class="role">Row&nbsp;1: « Température air » · « Température ciel » · « Luminosité ». Row&nbsp;2: « Pression » · « Vitesse du vent » · « Humidité&nbsp;/&nbsp;Pluie ».</div>
+        <dl class="kv">
+          <dt>Plot frame</dt><dd>Title inset in top rule (Subtext0); unit chip top-right (frame <code>#313244</code>, text Overlay2).</dd>
+          <dt>Axes</dt><dd>Y&nbsp;max top-left, Y&nbsp;min bottom-left (Overlay1); X = −10m&nbsp;·&nbsp;−5m&nbsp;·&nbsp;« maint. ».</dd>
+          <dt>Trace</dt><dd>Dotted points (1.4&nbsp;px, ~2.3&nbsp;px spacing) in the quantity colour + gradient fill 13&nbsp;%→0. 180&nbsp;points (10&nbsp;min @ 1&nbsp;s).</dd>
+          <dt>Gridlines</dt><dd>Dotted horizontals at 25/50/75&nbsp;% (Surface2 @18&nbsp;%).</dd>
+          <dt>Wind</dt><dd>Gust overlaid beneath the main line at 32&nbsp;% opacity.</dd>
+          <dt>Humidité/Pluie</dt><dd>Humidity line <span class="swsq" style="background:#74c7ec"></span>(left axis, full frame) + rain bars <span class="swsq" style="background:#89b4fa"></span>(lower half, own scale) + inline legend.</dd>
+        </dl>
+      </div>
+
+      <div class="panel">
+        <h3>Power grid — « ÉNERGIE » · 3 plots</h3>
+        <div class="role">Its own row: « Batterie » · « Puissance solaire » · « Puissance charge ».</div>
+        <dl class="kv">
+          <dt>« Batterie »</dt><dd>Voltage V <span class="swsq" style="background:#a6e3a1"></span>Green, 2 decimals.</dd>
+          <dt>« Solaire »</dt><dd>Power W <span class="swsq" style="background:#f9e2af"></span>Yellow.</dd>
+          <dt>« Charge »</dt><dd>Power W <span class="swsq" style="background:#cba6f7"></span>Mauve.</dd>
+          <dt>Layout</dt><dd>Same frames/axes as Sensors; bars for rain only, lines elsewhere.</dd>
+        </dl>
+      </div>
+
+      <figure>
+        <img src="dossier/img/03-sec.png" alt="Sensors grid">
+        <figcaption>Fig. 3 — Sensors grid (6) and the start of the Power grid.</figcaption>
+      </figure>
+      <figure>
+        <img src="dossier/img/04-sec.png" alt="Power grid">
+        <figcaption>Fig. 4 — Power grid: « Batterie » · « Puissance solaire » · « Puissance charge », on its own row.</figcaption>
+      </figure>
+
+      <!-- ============ 5 ============ -->
+      <div class="h2wrap"></div>
+      <h2><span class="sectnum">5</span>Options &amp; implementation notes</h2>
+      <h3>Exposed options</h3>
+      <table class="spec">
+        <thead><tr><th style="width:30%">Option</th><th>Effect</th></tr></thead>
+        <tbody>
+          <tr><td>markerStyle</td><td><code>dots</code> (braille) or <code>line</code> (continuous) for all traces.</td></tr>
+          <tr><td>showGrid</td><td>Show / hide the horizontal dotted gridlines.</td></tr>
+          <tr><td>gustTrail</td><td>Show / hide the compass gust trail.</td></tr>
+        </tbody>
+      </table>
+      <h3>Ratatui port</h3>
+      <ul>
+        <li>Panels: <code>Block::default().borders(Borders::ALL).title(...)</code>; colours as <code>Color::Rgb</code> from the tables above.</li>
+        <li>Plots: <code>Chart</code> + <code>Dataset</code> with <code>Marker::Braille</code>, or a custom <code>Canvas</code> for the fill; axes via <code>Axis</code> with min/max labels.</li>
+        <li>Compass: <code>Canvas</code> (rings, ticks, trail points, needle); cardinals and centre readout as <code>labels</code>.</li>
+        <li>Refresh: redraw on each sample (1&nbsp;Hz) or on event.</li>
+      </ul>
+
+      <div class="callout">
+        <b>Note.</b> The capture values are a sunny-afternoon scene, chosen to make the compass and power gauges legible. The interface strings are intentionally French; this spec is English. Thresholds (battery 50/20&nbsp;%, RSSI −70/−90, packet 2/10&nbsp;s) are starting points — tune to taste.
+      </div>
+
+    </td></tr></tbody>
+    <tfoot><tr><td class="ftr-space"></td></tr></tfoot>
+  </table>
+</main>
+</x-dc>
+</body>
+</html>
