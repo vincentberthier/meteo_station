@@ -9,6 +9,7 @@
 mod app;
 mod ble;
 mod compass;
+mod image_render;
 mod model;
 mod plot;
 mod theme;
