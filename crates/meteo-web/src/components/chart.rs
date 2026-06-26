@@ -335,7 +335,6 @@ pub fn PlotPanel(
 mod tests {
     use core::{error, result};
 
-    use leptos::prelude::*;
     use test_log::test;
 
     use super::*;

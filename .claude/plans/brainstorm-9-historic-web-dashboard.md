@@ -1094,7 +1094,7 @@ Progress tracking (checked during implementation):
 - [x] 8. Wind compass component — WindCompass (stacked dial+needle SVG imgs, reactive rotation via style:transform, FR overlay: speed/cap°/16-pt rose/rafale), 2 tests. Spec review: pass.
 - [x] 9. All-panels page (live band + grid + time select) — TimeWindow+bucket ladder+pure zoom_about/pan_by/presets, SSE-fed LiveBand (hydrate-gated EventSource), 9-panel grid (6 CAPTEURS + 3 ÉNERGIE) keyed on window Resource, 4 tests. Pan/zoom via buttons (accepted). Spec review: pass.
 - [x] 10. Comparison page — ComparisonPage (axis_layout Shared/DualY/Normalized, 0..86400 time-of-day overlays, add/remove UI, per-trace Resources via keyed <For>, palette legend), 3 tests. Spec review: warn→fixed (per-trace Resources per user request).
-- [ ] 11. Docs + final checks
+- [x] 11. Docs + final checks — CLAUDE.md module map + Web dashboard section, ROADMAP item marked IMPLEMENTED, Justfile recipes confirmed; FULL GATE GREEN (223 tests, clippy + web-clippy clean, firmware + web build). proc-macro-error2 future-compat = transitive leptos internal, documented. Spec review: pass.
 
 Next step after approval: `/tyrex:code:implement-light` (substeps are ordered by
 dependency; 1→2→3→4 are a chain, 6/7/8 can interleave, 9/10 land last).

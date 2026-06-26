@@ -42,22 +42,29 @@ just run
 # Reset the device
 just reset
 
-# Check code with clippy (firmware + meteo-lib + meteo-tui)
+# Check code with clippy (firmware + meteo-lib + meteo-tui + meteo-chart + meteo-web ssr)
 just clippy
 
 # Format code
 just format
 
-# Run tests on host (meteo-lib + meteo-tui)
+# Run tests on host (meteo-lib + meteo-tui + meteo-chart + meteo-web ssr)
 just test
 
 # Show binary size
 just size
 
-# Dashboard (host target only)
+# TUI dashboard (host target only)
 just tui-build           # build the TUI dashboard
 just tui-run             # run the TUI dashboard
 just tui-clippy          # clippy the TUI crate only (fast loop)
+
+# Web dashboard (cargo-leptos, nightly toolchain)
+just web-build           # SSR server + wasm hydration bundle (release)
+just web-build-pi        # cross-build server for Raspberry Pi (aarch64)
+just web-serve           # serve locally with hot-reload (dev)
+just web-watch           # watch + rebuild (dev)
+just web-clippy          # clippy ssr + hydrate targets
 ```
 
 ### Flashing & logging with espflash
@@ -140,11 +147,44 @@ crates/
 │           ├── veml7700.rs  # VEML7700 ambient light driver (auto-ranging lux)
 │           ├── ina219.rs  # INA219 current/bus-voltage driver (host-tested conversions)
 │           └── weather_meter.rs # SEN-15901 conversions: wind speed/dir, rain rate
-└── meteo-tui/             # Binary crate: terminal dashboard (host, x86_64-linux)
+├── meteo-chart/           # Library crate: pure chart math + display helpers (host + wasm32)
+│   └── src/
+│       ├── lib.rs         # Re-exports; compiles for host and wasm32-unknown-unknown
+│       ├── palette.rs     # Catppuccin Mocha palette: 22 named Rgb constants + css()
+│       │                  #   helper; single colour source for TUI and web CSS
+│       ├── chart.rs       # gaussian_smooth, padded_value_bounds, value_axis_labels;
+│       │                  #   host-tested
+│       └── format.rs      # FR formatters: fmt_lux, fmt_power, fmt_uptime, fmt_location,
+│                          #   compass_label_fr, dew_point_c, power_w, lux_chart_unit,
+│                          #   classify_trend / Trend; host-tested
+├── meteo-tui/             # Binary crate: terminal dashboard (host, x86_64-linux)
+│   └── src/
+│       └── main.rs        # ratatui TUI: passive BLE scan, decode manufacturer-data
+│                          #   frames (company 0xFFFF), SignalState header, location
+│                          #   row, diagnostics row; no GATT connection required
+└── meteo-web/             # Binary+lib crate: web dashboard (Leptos 0.8, cargo-leptos)
+    ├── build.rs           # Generates style/_palette.scss from meteo_chart::palette
+    │                      #   at build time (single colour source; Rust + CSS cannot drift)
     └── src/
-        └── main.rs        # ratatui TUI: passive BLE scan, decode manufacturer-data
-                           #   frames (company 0xFFFF), SignalState header, location
-                           #   row, diagnostics row; no GATT connection required
+        ├── lib.rs         # App shell, router (/ and /comparaison), hydrate entry-point
+        ├── main.rs        # SSR binary: DB open, BLE collector spawn, axum server + /live
+        ├── state.rs       # AppState (leptos context): DbHandle + live watch receiver
+        ├── types.rs       # HistoryRow, LiveFrame, Metric, MetricStat, TracePoint (DTOs)
+        ├── api/
+        │   ├── mod.rs     # Leptos server fns: get_history, get_comparison_trace
+        │   └── sse.rs     # Axum SSE handler for GET /live (1 Hz LiveFrame JSON stream)
+        ├── collector/
+        │   ├── mod.rs     # BLE passive-scan loop; folds frames into BucketAccumulator;
+        │   │              #   flushes to SQLite on minute boundary (observed transition,
+        │   │              #   no fixed sleep); adapter loss → waits for AdapterAdded event
+        │   └── bucket.rs  # BucketAccumulator: per-minute min/max/avg + sample count
+        ├── db/
+        │   ├── mod.rs     # DbHandle (rusqlite, WAL, spawn_blocking); store_bucket,
+        │   │              #   query_history (GROUP BY bucket_ts/bucket_secs with
+        │   │              #   sample-count-weighted avg), query_comparison
+        │   └── schema.sql # samples table: one row per minute, power stored as mv/ma
+        ├── components/    # Leptos UI components (chart, compass, header, live_band, …)
+        └── pages/         # AllPanelsPage (/) and ComparisonPage (/comparaison)
 ```
 
 **Library vs Binary separation:**
@@ -202,6 +242,134 @@ triggers a reconnect. The firmware-version display is removed (no DIS; no connec
 
 **Host prerequisites.** At build time: `libdbus-1-dev`. At runtime: a running
 `bluetoothd` (present on the dev machine / gaia).
+
+### Chart helpers (`meteo-chart`)
+
+`crates/meteo-chart` is a pure `no_std`-compatible library crate that compiles for both
+the host (`x86_64`) and `wasm32-unknown-unknown`. It is consumed by both `meteo-tui` and
+`meteo-web`; neither crate contains chart math or colour definitions of its own.
+
+- **Palette** (`palette.rs`): 22 named Catppuccin Mocha `Rgb` constants + a `css()`
+  helper that formats `#rrggbb` strings for CSS/SVG. This is the **single colour source**
+  for the entire project: the TUI derives `ratatui::style::Color::Rgb` values from these
+  constants; the web `build.rs` generates `style/_palette.scss` CSS variables from them.
+- **Chart math** (`chart.rs`): `gaussian_smooth` (centered Gaussian weighted moving
+  average), `padded_value_bounds` (5 % margin + physical floor clamp),
+  `value_axis_labels` (auto-bumping precision so axis ends never render identically).
+- **Formatters** (`format.rs`): French-locale display helpers — `fmt_lux` (lx / klx
+  adaptive unit), `fmt_power` (mW / W adaptive unit), `fmt_uptime`, `fmt_location`,
+  `compass_label_fr` (16-point rose with O for West), `dew_point_c`, `power_w`
+  (mv × ma → watts), `lux_chart_unit`, `classify_trend` / `Trend`.
+
+All logic is host-tested via `cargo nextest`.
+
+### Web dashboard (`meteo-web` / `meteo-chart`)
+
+`crates/meteo-web` is a Leptos 0.8 SSR application built by **cargo-leptos**. A single
+binary contains both a BLE collector task and an axum web server. It requires the
+**nightly** Rust toolchain (`leptos` `nightly` feature); the rest of the workspace stays
+on stable.
+
+**Topology:**
+
+- Passive BLE scan (bluer) on the same `MeteoStation` manufacturer-data stream as
+  `meteo-tui`, decoding 38-byte v5 frames from company `0xFFFF`.
+- Each decoded frame is forwarded to a `tokio::sync::watch` channel (`live_tx` /
+  `live_rx`) for the live SSE band.
+- Frames are also folded into a `BucketAccumulator` (min/max/avg + sample count per
+  minute). When the clock crosses a minute boundary — detected by observing the real
+  `chrono::Utc::now()` transition, never by a fixed sleep — the finished bucket is
+  written to SQLite via `DbHandle::store_bucket`.
+- The collector reconnects on adapter loss by waiting for the
+  `bluer::SessionEvent::AdapterAdded` event; no fixed backoff sleep is used (diverges
+  from `meteo-tui`'s simpler approach, which used a sleep).
+
+**SQLite (`samples` table):**
+
+One row per minute. Schema: `bucket_ts` (unix epoch, floored to minute, PRIMARY KEY),
+per-field `*_min` / `*_max` / `*_avg` columns in real units (°C, hPa, %, lux, m/s,
+mm/h, %, mV, mA), `wind_dir_avg` (degrees), and `sample_count`. Power is **not** stored
+in watts: the raw `solar_mv_avg` / `solar_ma_avg` / `batt_mv_avg` / `load_ma_avg` are
+stored; `meteo_chart::power_w` converts to watts in Rust when rows are read back. WAL
+mode is enabled. Blocking rusqlite calls are offloaded via `tokio::task::spawn_blocking`.
+
+Query-time re-aggregation (`GROUP BY bucket_ts / bucket_secs`) allows any coarser
+resolution without a separate write path. Within each coarser window, averages are
+re-combined as a **sample-count-weighted** mean; min/max use SQL `MIN`/`MAX`.
+
+**Server fns and SSE endpoint:**
+
+- `get_history(from_ts, to_ts, bucket_secs)` — Leptos server fn; returns
+  `Vec<HistoryRow>` with power fields already in watts.
+- `get_comparison_trace(date, metric)` — Leptos server fn; returns one `TracePoint`
+  per stored minute for the given UTC date and metric; `x` = seconds since midnight.
+- `GET /live` — axum SSE handler; streams one JSON `LiveFrame` per second from the
+  watch channel; sends a comment keep-alive when no frame is available.
+
+**Pages:**
+
+- `/` (`AllPanelsPage`) — live dashboard: a live-data band (last frame values) above a
+  history grid (one `PlotPanel` per metric), time-window selector, and a wind compass.
+- `/comparaison` (`ComparisonPage`) — multi-day overlay chart: pick a metric and
+  compare traces for several calendar dates on one SVG chart.
+
+**Colour source and CSS generation:**
+
+`build.rs` reads `meteo_chart::palette` constants and writes `style/_palette.scss`
+before the SCSS compiler runs. Every CSS variable (`--base`, `--peach`, etc.) is derived
+from the same Rust `Rgb` constants that the TUI uses, so the two dashboards share one
+colour definition that cannot drift.
+
+**Build wiring caveat:**
+
+The workspace `.cargo/config.toml` default target is `riscv32imac-unknown-none-elf`.
+cargo-leptos passes `--target` explicitly on both the server and wasm builds, and
+`bin-target-triple = "x86_64-unknown-linux-gnu"` is set in `[package.metadata.leptos]`
+(overridable to `aarch64-unknown-linux-gnu` for the Pi build). `meteo-web` therefore
+does NOT inherit the riscv default. `just build` stays firmware-only.
+
+**Environment variables at runtime:**
+
+| Variable             | Default             | Description                                                                        |
+| -------------------- | ------------------- | ---------------------------------------------------------------------------------- |
+| `METEO_DB_PATH`      | `meteo.db`          | Path to the SQLite samples database                                                |
+| `METEO_STATION_ADDR` | `F0:CA:FE:00:00:01` | BLE address (currently compile-time constant `STATION_ADDR` in `collector/mod.rs`) |
+
+**Pi deployment:**
+
+```bash
+just web-build-pi   # aarch64-unknown-linux-gnu cross-build (SSR server only)
+just web-build      # x86_64 build for local dev
+just web-serve      # serve locally with hot-reload (cargo-leptos serve)
+```
+
+`just web-build-pi` cross-compiles the SSR server binary for aarch64. Prerequisites:
+
+- `rustup target add aarch64-unknown-linux-gnu` (not yet installed).
+- A cross linker (e.g. `aarch64-linux-gnu-gcc`) configured in `.cargo/config.toml`
+  under `[target.aarch64-unknown-linux-gnu]`.
+- At build time: `libdbus-1-dev` (for bluer).
+- At runtime on the Pi: a running `bluetoothd` and a powered LE Bluetooth adapter.
+
+The dev machine (gaia) is also the BLE host, so `just web-serve` works locally without
+any network hop — the bluer session connects to the local `bluetoothd`.
+
+**Known transitive future-compat notice:** `proc-macro-error2 v2.0.1` is pulled in by
+`leptos_macro` / `leptos_router_macro` / `reactive_stores_macro` and emits a
+future-incompatibility warning under nightly. It is a transitive dep of leptos 0.8 with
+no independently actionable fix from this workspace; it will be resolved when leptos
+upgrades it upstream.
+
+**Host-only build — never build with `--workspace` on the default target.** Use the
+`web-*` Just recipes exclusively.
+
+```bash
+just web-build           # SSR server + wasm bundle (release)
+just web-build-pi        # cross-build server for Pi (aarch64; needs toolchain installed)
+just web-serve           # local hot-reload dev server
+just web-watch           # watch + rebuild
+just web-clippy          # clippy ssr + hydrate targets
+```
 
 ## Hardware
 

@@ -423,32 +423,30 @@ the whole fleet needs a flashing/update story. How it stays manageable:
 - **The Pi collector, if built, is the natural local update host** — it already talks to
   the station, so it can serve firmware over BLE (or a wired link when co-located).
 
-### Web server for historic data (Raspberry Pi collector)
+### Web server for historic data (Raspberry Pi collector) — IMPLEMENTED (`meteo-web`)
 
-An always-on collector (e.g. a Raspberry Pi) that stores history and serves a web
-dashboard with roughly the same look as `meteo-tui`, but with **past-data browsing** —
-pick a day/week, pan and zoom — instead of just the live scrolling window.
+**Status: implemented as `crates/meteo-web`.** The `meteo-web` crate is a Leptos 0.8 SSR
+application (cargo-leptos) that runs the BLE collector and the web server in one binary.
+See `CLAUDE.md §"Web dashboard (meteo-web / meteo-chart)"` for the full architecture.
 
-- **Reuses the TUI's guts.** The Pi is aarch64 Linux/std, so it runs the same passive
-  BLE scan (`bluer`) and the same `meteo-lib::ble::frame::decode` as `meteo-tui`. Build
-  it as a sibling crate that shares scan + decode, then writes to a database and serves a
-  web page instead of drawing a terminal. No re-implementation of the wire format.
-- **Downsample on ingest.** The station keeps broadcasting at 1 Hz; the collector
-  aggregates to ~**1/min** (1/60 Hz) records. Store **min/max/avg per bucket**, not just
-  the average — a plain 1-min average would erase wind gusts and pressure spikes (the TUI
-  already surfaces gusts). 1440 rows/day is trivial.
-- **No retention tiers — just keep 1-min raw, forever.** Storage is a non-issue:
-  ~1440 rows/day × ~120 B ≈ 170 KiB/day ≈ ~60 MiB/year, ~2.4 GiB over 40 years. A single
-  flat SQLite table is plenty; rollup/downsampling tables buy nothing here. The only thing
-  that scales is _rendering_ a multi-year view (≈525 k points/series/year), and the fix
-  for that is to **aggregate at query time** (`min/max/avg GROUP BY` a zoom-sized bucket),
-  not to pre-store rollups. RRDtool's auto-downsampling is therefore unnecessary.
-- **Frontend.** Either a custom page matching the TUI look (a charting lib like uPlot
-  handles large time-series with pan/zoom), or — quick path — point **Grafana** at the DB
-  for history browsing with little custom work.
-- **Fixes timestamps for free.** The Pi has NTP wall-clock, so the station-side RTC /
-  flash-logging item below becomes optional for history. On-device logging still covers
-  gaps when the Pi is down or the station is out of BLE range.
+What was built matches the original design notes:
+
+- Passive BLE scan (bluer) reusing `meteo-lib::ble::frame::decode` — same wire format as
+  `meteo-tui`, no re-implementation.
+- 1-minute min/max/avg SQLite buckets (`samples` table, WAL, `~170 KiB/day`).
+- Query-time re-aggregation (`GROUP BY bucket_ts / bucket_secs`) with
+  sample-count-weighted averages; no rollup tables needed.
+- Two web pages: `/` (all-panels live + history grid) and `/comparaison` (multi-day
+  overlay chart). Custom Leptos SVG charts matching the TUI palette and layout.
+- Live SSE stream at `GET /live` — 1 Hz `LiveFrame` JSON events.
+- Pi deployment path: `just web-build-pi` (aarch64 cross-build; needs toolchain installed
+  — see `CLAUDE.md`).
+- Timestamps from NTP wall-clock (the Pi has it), making on-device RTC optional for
+  history.
+
+Remaining open item from the original note: the Pi cross-build toolchain (`aarch64-
+unknown-linux-gnu` rustup target + cross linker) is not yet installed; `just web-build-pi`
+will fail until it is. `just web-build` and `just web-serve` work on the dev host today.
 
 ### On-device logging & RTC
 

@@ -72,6 +72,7 @@ test:
     cargo nextest run -p meteo-lib --target {{ host_target }}
     cargo nextest run -p meteo-tui --target {{ host_target }}
     cargo nextest run -p meteo-chart --target {{ host_target }}
+    cargo +nightly nextest run -p meteo-web --features ssr --target {{ host_target }}
 
 # --- Dashboard recipes ---
 
