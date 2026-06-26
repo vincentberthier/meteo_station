@@ -149,3 +149,150 @@ impl LiveFrame {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests (ssr only — LiveFrame::from_telemetry is ssr-gated)
+// ---------------------------------------------------------------------------
+
+// grcov exclude start
+#[expect(clippy::panic_in_result_fn, reason = "test module")]
+#[cfg(all(test, feature = "ssr"))]
+mod tests {
+    use core::{error, result};
+
+    use meteo_lib::{Telemetry, ble::frame::Diagnostics};
+    use test_log::test;
+
+    use super::LiveFrame;
+
+    type TestResult = result::Result<(), Box<dyn error::Error>>;
+
+    /// Construct a fully-populated `Telemetry` frame for tests.
+    fn full_telemetry() -> Telemetry {
+        Telemetry {
+            temperature_c: Some(20.0),
+            pressure_hpa: Some(1013.25),
+            humidity_pct: Some(60.0),
+            sky_temp_c: Some(-5.0),
+            luminosity_lux: Some(500.0),
+            wind_speed_ms: Some(2.0),
+            wind_dir_deg: Some(180.0),
+            battery_pct: Some(90),
+            rain_rate_mm_h: Some(0.5),
+            solar_mv: Some(5_000),
+            solar_ma: Some(200),
+            batt_mv: Some(4_100),
+            load_ma: Some(100),
+            diagnostics: Diagnostics(0),
+            uptime_s: 1_234,
+            latitude_deg: None,
+            longitude_deg: None,
+            altitude_m: None,
+        }
+    }
+
+    /// `from_telemetry` must preserve all present sensor fields and compute
+    /// power in watts using `meteo_chart::power_w`.
+    #[test]
+    #[expect(clippy::unwrap_used, reason = "test: values asserted to be Some")]
+    fn live_frame_from_telemetry_maps_fields() -> TestResult {
+        // Given
+        let t = full_telemetry();
+
+        // When
+        let lf = LiveFrame::from_telemetry(&t);
+
+        // Then — scalar fields are copied verbatim
+        assert!(
+            (lf.temperature_c.unwrap() - 20.0_f32).abs() < 1e-4,
+            "temperature_c mismatch"
+        );
+        assert!(
+            (lf.humidity_pct.unwrap() - 60.0_f32).abs() < 1e-4,
+            "humidity_pct mismatch"
+        );
+        assert!(
+            (lf.pressure_hpa.unwrap() - 1013.25_f32).abs() < 1e-2,
+            "pressure_hpa mismatch"
+        );
+        assert!(
+            (lf.sky_temp_c.unwrap() - (-5.0_f32)).abs() < 1e-4,
+            "sky_temp_c mismatch"
+        );
+        assert!(
+            (lf.wind_speed_ms.unwrap() - 2.0_f32).abs() < 1e-4,
+            "wind_speed_ms mismatch"
+        );
+        assert!(
+            (lf.wind_dir_deg.unwrap() - 180.0_f32).abs() < 1e-4,
+            "wind_dir_deg mismatch"
+        );
+        assert_eq!(lf.battery_pct, Some(90), "battery_pct mismatch");
+        assert_eq!(lf.uptime_s, 1_234, "uptime_s mismatch");
+
+        // Power must match meteo_chart::power_w
+        let expected_solar = meteo_chart::power_w(t.solar_mv, t.solar_ma);
+        assert_eq!(lf.solar_w, expected_solar, "solar_w mismatch");
+        // 5 V × 0.2 A = 1.0 W
+        assert!(
+            (lf.solar_w.unwrap() - 1.0).abs() < 1e-9,
+            "solar_w should be 1.0 W"
+        );
+
+        let expected_load = meteo_chart::power_w(t.batt_mv, t.load_ma);
+        assert_eq!(lf.load_w, expected_load, "load_w mismatch");
+        // 4.1 V × 0.1 A = 0.41 W
+        assert!(
+            (lf.load_w.unwrap() - 0.41).abs() < 1e-6,
+            "load_w should be 0.41 W"
+        );
+
+        Ok(())
+    }
+
+    /// A `Telemetry` with every optional field `None` must produce a
+    /// `LiveFrame` with `solar_w` and `load_w` both `None` (no panic).
+    #[test]
+    fn live_frame_from_telemetry_all_none() -> TestResult {
+        // Given — all Optional fields are None
+        let t = Telemetry {
+            temperature_c: None,
+            pressure_hpa: None,
+            humidity_pct: None,
+            sky_temp_c: None,
+            luminosity_lux: None,
+            wind_speed_ms: None,
+            wind_dir_deg: None,
+            battery_pct: None,
+            rain_rate_mm_h: None,
+            solar_mv: None,
+            solar_ma: None,
+            batt_mv: None,
+            load_ma: None,
+            diagnostics: Diagnostics(0),
+            uptime_s: 42,
+            latitude_deg: None,
+            longitude_deg: None,
+            altitude_m: None,
+        };
+
+        // When
+        let lf = LiveFrame::from_telemetry(&t);
+
+        // Then — no panic, power fields are None, uptime_s is preserved
+        assert!(
+            lf.solar_w.is_none(),
+            "solar_w must be None when inputs are None"
+        );
+        assert!(
+            lf.load_w.is_none(),
+            "load_w must be None when inputs are None"
+        );
+        assert_eq!(lf.uptime_s, 42, "uptime_s must be preserved");
+        assert!(lf.temperature_c.is_none());
+        assert!(lf.battery_pct.is_none());
+
+        Ok(())
+    }
+}
+// grcov exclude stop

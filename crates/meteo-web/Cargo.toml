@@ -28,8 +28,10 @@ console_error_panic_hook = { version = "0.1", optional = true }
 meteo-lib = { workspace = true }
 meteo-chart = { path = "../meteo-chart" }
 anyhow = { version = "1", optional = true }
+serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
+serde_json = "1"
 test-log = { workspace = true }
 env_logger = { workspace = true }
 
@@ -45,6 +47,7 @@ ssr = [
     "dep:bluer",
     "dep:futures",
     "dep:anyhow",
+    "dep:serde_json",
     "leptos/ssr",
     "leptos_meta/ssr",
     "leptos_router/ssr",

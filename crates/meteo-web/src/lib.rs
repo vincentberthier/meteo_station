@@ -25,6 +25,7 @@
     reason = "meteo-web is a host std crate; core/alloc-first lints do not apply"
 )]
 
+pub mod api;
 pub mod types;
 
 #[cfg(feature = "ssr")]
@@ -32,6 +33,9 @@ pub mod db;
 
 #[cfg(feature = "ssr")]
 pub mod collector;
+
+#[cfg(feature = "ssr")]
+pub mod state;
 
 use leptos::prelude::*;
 use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};

@@ -1088,7 +1088,7 @@ Progress tracking (checked during implementation):
 - [x] 2. `meteo-web` skeleton + cargo-leptos wiring (SSR hello) — Leptos 0.8 axum SSR shell, 2 routes, wasm-release profile, web-\* recipes; SSR+wasm build green. Spec review: pass. (i2c_scan pre-existing clippy fix split into separate fix changeset.)
 - [x] 3. SQLite storage layer — types.rs DTOs (wasm-safe) + ssr-only db/ (DbHandle, BucketRow, schema, weighted re-aggregation, Rust-side power_w, history_impl/comparison_impl), 6 tests. Spec review: pass.
 - [x] 4. Collector task + pure bucket accumulator — ssr-only collector (bluer passive scan, observer-based reconnect, no sleep) + pure BucketAccumulator (vector-mean wind dir, None-skipping), 6 tests. Spec review: pass.
-- [ ] 5. Server functions + SSE live endpoint
+- [x] 5. Server functions + SSE live endpoint — AppState + get_history/get_comparison_trace server fns + 1 Hz SSE /live (pure live_event), collector spawned + context wired in main.rs, 5 tests. Spec review: pass.
 - [ ] 6. Catppuccin CSS + fonts + app shell/routing
 - [ ] 7. `PlotPanel` SVG chart + header
 - [ ] 8. Wind compass component
