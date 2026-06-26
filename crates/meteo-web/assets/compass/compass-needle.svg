@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 768 768" width="768" height="768">
+  <defs>
+    <linearGradient id="nblade" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#4aa6c9"></stop>
+      <stop offset="55%" stop-color="#89dceb"></stop>
+      <stop offset="100%" stop-color="#b6f0fb"></stop>
+    </linearGradient>
+    <linearGradient id="sblade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#46586a"></stop>
+      <stop offset="100%" stop-color="#2c3a47"></stop>
+    </linearGradient>
+    <filter id="sh" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#000" flood-opacity="0.45"></feDropShadow>
+    </filter>
+  </defs>
+  <g filter="url(#sh)">
+    <path d="M 384 560 L 370 384 L 398 384 Z" fill="url(#sblade)" stroke="rgba(0,0,0,.25)" stroke-width="1"></path>
+    <path d="M 384 84 L 370 384 L 398 384 Z" fill="url(#nblade)" stroke="rgba(8,30,40,.35)" stroke-width="1"></path>
+    <circle cx="384" cy="384" r="24" fill="#11111b" stroke="#45475a" stroke-width="3"></circle>
+    <circle cx="384" cy="384" r="7" fill="#585b70"></circle>
+  </g>
+</svg>

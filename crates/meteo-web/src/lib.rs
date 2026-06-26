@@ -82,13 +82,28 @@ pub fn App() -> impl IntoView {
         <Title text="MeteoStation"/>
 
         <Router>
-            <main>
+            <div class="page-main">
+                <SiteHeader/>
                 <Routes fallback=|| view! { <p>"Page introuvable."</p> }>
                     <Route path=StaticSegment("") view=DashboardPage/>
                     <Route path=StaticSegment("comparaison") view=ComparaisonPage/>
                 </Routes>
-            </main>
+            </div>
         </Router>
+    }
+}
+
+/// Shared site header with navigation (placeholder — substep 7 replaces this).
+#[component]
+fn SiteHeader() -> impl IntoView {
+    view! {
+        <header class="app-header">
+            <a class="app-title" href="/">"MeteoStation"</a>
+            <nav>
+                <a href="/">"En direct"</a>
+                <a href="/comparaison">"Comparaison"</a>
+            </nav>
+        </header>
     }
 }
 
@@ -96,8 +111,30 @@ pub fn App() -> impl IntoView {
 #[component]
 fn DashboardPage() -> impl IntoView {
     view! {
-        <h1>"Tableau de bord"</h1>
-        <p>"Les données météo s'afficheront ici."</p>
+        <div class="content-area">
+            <div class="live-band">
+                <span class="live-label">"En direct"</span>
+            </div>
+            <div class="history-grid">
+                <div class="chart-panel">
+                    <div class="chart-panel-header">"Température de l'air"</div>
+                    <div class="chart-panel-body"></div>
+                </div>
+                <div class="chart-panel">
+                    <div class="chart-panel-header">"Vitesse du vent"</div>
+                    <div class="chart-panel-body">
+                        <span class="wind-summary">
+                            <span class="color-sky">"— m/s"</span>
+                            <span class="gust-label">"rafale"</span>
+                        </span>
+                    </div>
+                </div>
+                <div class="chart-panel">
+                    <div class="chart-panel-header">"Pression"</div>
+                    <div class="chart-panel-body"></div>
+                </div>
+            </div>
+        </div>
     }
 }
 
@@ -105,8 +142,10 @@ fn DashboardPage() -> impl IntoView {
 #[component]
 fn ComparaisonPage() -> impl IntoView {
     view! {
-        <h1>"Comparaison historique"</h1>
-        <p>"Les graphiques comparatifs s'afficheront ici."</p>
+        <div class="content-area">
+            <h1 class="font-mono color-peach">"Comparaison historique"</h1>
+            <p class="color-subtext">"Les graphiques comparatifs s'afficheront ici."</p>
+        </div>
     }
 }
 
