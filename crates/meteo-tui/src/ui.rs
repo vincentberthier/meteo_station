@@ -1,6 +1,7 @@
 //! Ratatui UI rendering — one `render` function that draws the full dashboard
 //! for a single frame.
 
+pub mod diagnostics;
 pub mod header;
 pub mod summary;
 
