@@ -2,7 +2,7 @@
 
 - **Source:** '9 (`.claude/brainstorm/9-historic-web-dashboard.md`)
 - **Date:** 2026-06-26
-- **Status:** Planned (plan-reviewer: PASS, round 3)
+- **Status:** Done (all 11 substeps implemented; post-implementation review: PASS)
 
 ## Summary
 
