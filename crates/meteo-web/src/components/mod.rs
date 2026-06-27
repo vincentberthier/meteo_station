@@ -9,7 +9,7 @@ pub mod header;
 pub mod live_band;
 pub mod time_select;
 
-pub use chart::{ChartSeries, PlotPanel};
+pub use chart::{ChartSeries, PlotPanel, XAxisDecor};
 pub use compass::WindCompass;
 pub use header::{Header, SignalLevel};
 pub use live_band::LiveBand;

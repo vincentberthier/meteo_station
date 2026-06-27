@@ -481,6 +481,65 @@ body {
     display: block;
 }
 
+// X-axis strip below each plot: percent-positioned time labels + sun glyphs
+// (so they line up with the SVG marker lines, which share the same domain).
+.plot-xaxis {
+    position: relative;
+    height: 16px;
+    background-color: var(--crust);
+    border-top: 1px solid var(--border);
+    font-size: 0.62rem;
+    color: var(--subtext0);
+    overflow: hidden;
+}
+
+.plot-xaxis > span {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    white-space: nowrap;
+    line-height: 1;
+}
+
+.xaxis-edge {
+    color: var(--subtext0);
+    transform: translateY(-50%);
+}
+
+.xaxis-start {
+    left: 0.7rem;
+}
+
+.xaxis-end {
+    right: 0.7rem;
+    left: auto;
+}
+
+.xaxis-day {
+    color: var(--overlay1);
+}
+
+// Sun glyphs: colour by event kind; opacity (twilight fade) is set inline.
+.xaxis-sun {
+    font-size: 0.72rem;
+}
+
+.xaxis-sunrise {
+    color: var(--yellow);
+}
+.xaxis-sunset {
+    color: var(--peach);
+}
+.xaxis-civil {
+    color: var(--sapphire);
+}
+.xaxis-nautical {
+    color: var(--blue);
+}
+.xaxis-astro {
+    color: var(--lavender);
+}
+
 // ---------------------------------------------------------------------------
 // Page comparaison / Comparison page
 // ---------------------------------------------------------------------------

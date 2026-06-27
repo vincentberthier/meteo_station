@@ -48,15 +48,86 @@
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::AnyView;
 use meteo_chart::palette::{BLUE, GREEN, LAVENDER, MAUVE, PEACH, SAPPHIRE, SKY, YELLOW, css};
+use meteo_chart::{day_marks, fmt_dm, fmt_hm, sun_marks};
 
 use crate::{
     api::get_history,
     components::{
-        ChartSeries, LiveBand, PlotPanel, TimeSelect,
+        ChartSeries, LiveBand, PlotPanel, TimeSelect, XAxisDecor,
         time_select::{TimeWindow, pan_by, preset_day, zoom_about},
     },
-    types::HistoryRow,
+    types::{HistoryRow, LiveFrame},
 };
+
+/// Local UTC offset in seconds (local − UTC). Browser timezone under `hydrate`;
+/// `0` elsewhere (the chart grid is client-only, so only the browser value is
+/// ever used to position markers/labels).
+#[cfg_attr(
+    not(feature = "hydrate"),
+    expect(
+        clippy::missing_const_for_fn,
+        reason = "the hydrate cfg of this fn calls Local::now() and is not const"
+    )
+)]
+fn local_tz_offset_secs() -> i32 {
+    #[cfg(feature = "hydrate")]
+    {
+        use chrono::Offset as _;
+        chrono::Local::now().offset().fix().local_minus_utc()
+    }
+    #[cfg(not(feature = "hydrate"))]
+    {
+        0
+    }
+}
+
+/// Number of days spanned (rough threshold logic for label density).
+const DAY_LABEL_MIN_DAYS: f64 = 1.0;
+const DAY_LABEL_MAX_DAYS: f64 = 14.0;
+
+/// Build the shared x-axis decorations from the resolved history rows, the
+/// station location, and the local timezone offset.
+///
+/// The domain is the data extent (`first.ts .. last.ts`) so markers align with
+/// the trace. Solar marks need a location; without one only day boundaries and
+/// edge labels are produced. Interior date labels appear only for multi-day
+/// (but not too wide) windows.
+fn build_decor(rows: &[HistoryRow], loc: Option<(f64, f64)>, tz_off: i32) -> XAxisDecor {
+    let (Some(first), Some(last)) = (rows.first(), rows.last()) else {
+        return XAxisDecor::default();
+    };
+    let d0 = first.ts as f64;
+    let d1 = last.ts as f64;
+    if d1 <= d0 {
+        return XAxisDecor::default();
+    }
+    let span_days = (d1 - d0) / 86_400.0;
+    let with_date = span_days > 1.0;
+    let edge = |x: f64| {
+        if with_date {
+            format!("{} {}", fmt_dm(x, tz_off), fmt_hm(x, tz_off))
+        } else {
+            fmt_hm(x, tz_off)
+        }
+    };
+
+    let sun = loc.map_or_else(Vec::new, |(lat, lon)| sun_marks(lat, lon, d0, d1));
+    let midnights = day_marks(d0, d1, tz_off);
+    let day_labels = if (DAY_LABEL_MIN_DAYS..=DAY_LABEL_MAX_DAYS).contains(&span_days) {
+        midnights.iter().map(|&x| (x, fmt_dm(x, tz_off))).collect()
+    } else {
+        Vec::new()
+    };
+
+    XAxisDecor {
+        domain: [d0, d1],
+        sun,
+        midnights,
+        start_label: edge(d0),
+        end_label: edge(d1),
+        day_labels,
+    }
+}
 
 /// All-panels dashboard page (route `/`).
 ///
@@ -99,6 +170,21 @@ pub fn AllPanelsPage() -> impl IntoView {
         if let Some(r) = history.get() {
             rows.set(r);
         }
+    });
+
+    // Shared x-axis decorations (time labels + solar markers). Location comes
+    // from the live frame (the station broadcasts its coarse fix); the timezone
+    // offset is the browser's. Recomputed when rows or location change.
+    let live_frame = expect_context::<RwSignal<Option<LiveFrame>>>();
+    let tz_off = local_tz_offset_secs();
+    let decor: Signal<XAxisDecor> = Signal::derive(move || {
+        let loc = live_frame
+            .get()
+            .and_then(|f| match (f.latitude_deg, f.longitude_deg) {
+                (Some(lat), Some(lon)) => Some((f64::from(lat), f64::from(lon))),
+                _ => None,
+            });
+        build_decor(&rows.get(), loc, tz_off)
     });
 
     // Render the chart grid CLIENT-SIDE ONLY (after hydration). The panels use a
@@ -185,7 +271,7 @@ pub fn AllPanelsPage() -> impl IntoView {
             // server + first client render, then the grid renders fresh on the
             // client. Mounted once; panel SVGs then update in place via reactive
             // Signal<ChartSeries> props — no remount on history refetch.
-            {move || mounted.get().then(|| view! { <HistoryGrid rows=rows /> })}
+            {move || mounted.get().then(|| view! { <HistoryGrid rows=rows x_axis=decor /> })}
         </div>
     }
     .into_any()
@@ -225,12 +311,18 @@ fn series_from_rows(
 
 /// Build one `AnyView`-erased `PlotPanel` — avoids monomorphizing the same
 /// 9-tuple type tree inline, which overflows the compiler's query-depth limit.
-fn panel(title: &str, unit: &str, series: Signal<ChartSeries>) -> AnyView {
+fn panel(
+    title: &str,
+    unit: &str,
+    series: Signal<ChartSeries>,
+    x_axis: Signal<XAxisDecor>,
+) -> AnyView {
     view! {
         <PlotPanel
             title=title.to_owned()
             unit=unit.to_owned()
             series=series
+            x_axis=x_axis
         />
     }
     .into_any()
@@ -260,7 +352,7 @@ fn panel(title: &str, unit: &str, series: Signal<ChartSeries>) -> AnyView {
 /// Energy series (Batterie / Solaire / Charge) have only avg values in
 /// `HistoryRow` (no min/max columns), so their `band` is always `None`.
 #[component]
-fn HistoryGrid(rows: RwSignal<Vec<HistoryRow>>) -> impl IntoView {
+fn HistoryGrid(rows: RwSignal<Vec<HistoryRow>>, x_axis: Signal<XAxisDecor>) -> impl IntoView {
     // ── CAPTEURS — reactive series in TUI display order ───────────────────
 
     let temp_series: Signal<ChartSeries> = Signal::derive(move || {
@@ -362,12 +454,12 @@ fn HistoryGrid(rows: RwSignal<Vec<HistoryRow>>) -> impl IntoView {
     // Row 1: Temp air (PEACH) · Temp ciel (LAVENDER) · Luminosité (YELLOW)
     // Row 2: Pression (BLUE)  · Vent (SKY)           · Humidité (SAPPHIRE)
     let capteurs: Vec<AnyView> = vec![
-        panel("Température de l'air", "°C", temp_series),
-        panel("Température du ciel", "°C", sky_series),
-        panel("Luminosité", "lx", lux_series),
-        panel("Pression", "hPa", pres_series),
-        panel("Vitesse du vent", "m/s", wind_series),
-        panel("Humidité", "%", hum_series),
+        panel("Température de l'air", "°C", temp_series, x_axis),
+        panel("Température du ciel", "°C", sky_series, x_axis),
+        panel("Luminosité", "lx", lux_series, x_axis),
+        panel("Pression", "hPa", pres_series, x_axis),
+        panel("Vitesse du vent", "m/s", wind_series, x_axis),
+        panel("Humidité", "%", hum_series, x_axis),
     ];
 
     // ── ÉNERGIE — Batterie · Solaire · Charge ─────────────────────────────
@@ -420,9 +512,9 @@ fn HistoryGrid(rows: RwSignal<Vec<HistoryRow>>) -> impl IntoView {
     });
 
     let energie: Vec<AnyView> = vec![
-        panel("Batterie", "%", batt_series),
-        panel("Solaire", "W", solar_series),
-        panel("Charge", "W", load_series),
+        panel("Batterie", "%", batt_series, x_axis),
+        panel("Solaire", "W", solar_series, x_axis),
+        panel("Charge", "W", load_series, x_axis),
     ];
 
     view! {

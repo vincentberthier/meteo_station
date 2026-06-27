@@ -26,8 +26,8 @@ use std::fmt::Write as _;
 
 use leptos::prelude::*;
 use meteo_chart::{
-    gaussian_smooth, padded_value_bounds,
-    palette::{CRUST, OVERLAY1, SURFACE2, css},
+    SunKind, SunMark, gaussian_smooth, padded_value_bounds,
+    palette::{BLUE, CRUST, LAVENDER, OVERLAY1, PEACH, SAPPHIRE, SUBTEXT0, SURFACE2, YELLOW, css},
     value_axis_labels,
 };
 
@@ -52,6 +52,117 @@ pub struct ChartSeries {
     pub floor: Option<f64>,
     /// Minimum decimal precision passed to `value_axis_labels`.
     pub prec: usize,
+}
+
+/// X-axis decorations shared by every panel: the time domain, solar-event
+/// marks, local-midnight lines, and the edge/day text labels.
+///
+/// All panels on the page share one instance (same window, same location), so
+/// it is computed once and passed as a reactive prop. An empty/default value
+/// (zero-width domain) renders no decorations.
+#[derive(Clone, Default, PartialEq)]
+pub struct XAxisDecor {
+    /// `[from, to]` unix-second domain the marks are positioned against.
+    pub domain: [f64; 2],
+    /// Solar-event marks (sunrise/sunset + twilights) within the domain.
+    pub sun: Vec<SunMark>,
+    /// Local-midnight instants (unix seconds) within the domain.
+    pub midnights: Vec<f64>,
+    /// Left-edge time label (e.g. `"21/06 08:00"`).
+    pub start_label: String,
+    /// Right-edge time label.
+    pub end_label: String,
+    /// Interior date labels `(x, "DD/MM")` for the midnight boundaries.
+    pub day_labels: Vec<(f64, String)>,
+}
+
+/// Span (days) above which solar-event lines are omitted (they would merge).
+const SUN_LINE_MAX_DAYS: f64 = 4.0;
+/// Span (days) above which the sun glyphs are omitted from the axis strip.
+const SUN_GLYPH_MAX_DAYS: f64 = 2.5;
+
+/// CSS-class suffix for a sun glyph, by kind (`xaxis-sunrise`, `xaxis-civil`, …).
+/// Dawn and dusk of the same depth share a colour; the morning/evening side is
+/// obvious from the glyph's x-position.
+const fn sun_class(kind: SunKind) -> &'static str {
+    match kind {
+        SunKind::Sunrise => "sunrise",
+        SunKind::Sunset => "sunset",
+        SunKind::CivilDawn | SunKind::CivilDusk => "civil",
+        SunKind::NauticalDawn | SunKind::NauticalDusk => "nautical",
+        SunKind::AstroDawn | SunKind::AstroDusk => "astro",
+    }
+}
+
+/// `#rrggbb` for a solar-event marker line, by kind.
+fn sun_hex(kind: SunKind) -> String {
+    let rgb = match kind {
+        SunKind::Sunrise => YELLOW,
+        SunKind::Sunset => PEACH,
+        SunKind::CivilDawn | SunKind::CivilDusk => SAPPHIRE,
+        SunKind::NauticalDawn | SunKind::NauticalDusk => BLUE,
+        SunKind::AstroDawn | SunKind::AstroDusk => LAVENDER,
+    };
+    css(rgb)
+}
+
+/// Build the HTML for the x-axis strip: absolutely-positioned (by percent) sun
+/// glyphs that fade with twilight depth, plus the start/end time labels and the
+/// interior day-boundary dates.
+///
+/// Positions are percentages of the domain so they line up with the SVG marker
+/// lines (which use the identical domain).
+fn render_xaxis_strip(decor: &XAxisDecor) -> String {
+    let [d0, d1] = decor.domain;
+    let span = d1 - d0;
+    if span <= 0.0 {
+        return String::new();
+    }
+    let span_days = span / 86_400.0;
+    let pct = |x: f64| (((x - d0) / span) * 100.0).clamp(0.0, 100.0);
+
+    let mut s = String::with_capacity(512);
+
+    // Edge time labels (pinned to the plot edges).
+    write!(
+        s,
+        r#"<span class="xaxis-edge xaxis-start font-mono">{}</span>"#,
+        decor.start_label
+    )
+    .ok();
+    write!(
+        s,
+        r#"<span class="xaxis-edge xaxis-end font-mono">{}</span>"#,
+        decor.end_label
+    )
+    .ok();
+
+    // Interior day-boundary date labels.
+    for (x, text) in &decor.day_labels {
+        write!(
+            s,
+            r#"<span class="xaxis-day font-mono" style="left:{:.2}%">{text}</span>"#,
+            pct(*x)
+        )
+        .ok();
+    }
+
+    // Sun glyphs, faded with twilight depth (skipped when the window is too wide
+    // for them to be legible — the marker lines still convey position).
+    if span_days <= SUN_GLYPH_MAX_DAYS {
+        for m in &decor.sun {
+            write!(
+                s,
+                r#"<span class="xaxis-sun xaxis-{}" style="left:{:.2}%;opacity:{:.2}">☀</span>"#,
+                sun_class(m.kind),
+                pct(m.x),
+                m.kind.glyph_opacity()
+            )
+            .ok();
+        }
+    }
+
+    s
 }
 
 /// Map a data point to SVG pixel coordinates.
@@ -93,7 +204,7 @@ pub fn project(x: f64, y: f64, xdom: [f64; 2], ydom: [f64; 2], w: f64, h: f64) -
     clippy::too_many_lines,
     reason = "SVG template string builder — splitting would obscure the visual structure"
 )]
-fn render_svg_chart(series: &ChartSeries, smooth_sigma: f64) -> String {
+fn render_svg_chart(series: &ChartSeries, decor: Option<&XAxisDecor>, smooth_sigma: f64) -> String {
     const W: f64 = SVG_W;
     const H: f64 = SVG_H;
 
@@ -103,7 +214,9 @@ fn render_svg_chart(series: &ChartSeries, smooth_sigma: f64) -> String {
     let color = &series.color_hex;
 
     // ── x domain ─────────────────────────────────────────────────────────────
-    let xdom: [f64; 2] = if series.points.is_empty() {
+    // Prefer the shared decor domain (the requested window) so every panel and
+    // its markers share one scale; fall back to the data extent otherwise.
+    let data_xdom: [f64; 2] = if series.points.is_empty() {
         [0.0, 1.0]
     } else {
         let xmin = series
@@ -121,6 +234,10 @@ fn render_svg_chart(series: &ChartSeries, smooth_sigma: f64) -> String {
         } else {
             [xmin, xmax]
         }
+    };
+    let xdom: [f64; 2] = match decor {
+        Some(d) if d.domain[1] - d.domain[0] > 0.0 => d.domain,
+        _ => data_xdom,
     };
 
     // ── Smooth the avg trace ──────────────────────────────────────────────────
@@ -195,6 +312,43 @@ fn render_svg_chart(series: &ChartSeries, smooth_sigma: f64) -> String {
             r#"<line x1="0" y1="{yg:.1}" x2="{W}" y2="{yg:.1}" stroke="{grid_hex}" stroke-dasharray="2,4" stroke-width="0.5"/>"#
         )
         .ok();
+    }
+
+    // ── Vertical time / solar marker lines (drawn under the trace) ────────────
+    if let Some(decor) = decor {
+        let span_days = (xdom[1] - xdom[0]) / 86_400.0;
+
+        // Local-midnight day boundaries: dashed, neutral.
+        let mid_hex = css(SUBTEXT0);
+        for &mx in &decor.midnights {
+            if mx < xdom[0] || mx > xdom[1] {
+                continue;
+            }
+            let px = proj(mx, ydom[0]).0;
+            write!(
+                svg,
+                r#"<line x1="{px:.1}" y1="0" x2="{px:.1}" y2="{H}" stroke="{mid_hex}" stroke-opacity="0.45" stroke-dasharray="3,3" stroke-width="0.6"/>"#
+            )
+            .ok();
+        }
+
+        // Solar events: thin, colour-coded, fading with depth. Omitted on very
+        // wide windows where they would merge into noise.
+        if span_days <= SUN_LINE_MAX_DAYS {
+            for m in &decor.sun {
+                if m.x < xdom[0] || m.x > xdom[1] {
+                    continue;
+                }
+                let px = proj(m.x, ydom[0]).0;
+                let hex = sun_hex(m.kind);
+                let op = 0.35_f64.mul_add(m.kind.glyph_opacity(), 0.25);
+                write!(
+                    svg,
+                    r#"<line x1="{px:.1}" y1="0" x2="{px:.1}" y2="{H}" stroke="{hex}" stroke-opacity="{op:.2}" stroke-width="0.8"/>"#
+                )
+                .ok();
+            }
+        }
     }
 
     if !smoothed.is_empty() {
@@ -307,6 +461,10 @@ pub fn PlotPanel(
     /// Gaussian smoothing σ in samples. 0.0 (default) uses the TUI Medium preset (3.5).
     #[prop(optional)]
     smooth_sigma: f64,
+    /// Shared x-axis decorations (time labels + solar-event markers). When
+    /// omitted, the panel renders no time markers and uses the data extent.
+    #[prop(optional)]
+    x_axis: Option<Signal<XAxisDecor>>,
 ) -> impl IntoView {
     let sigma = if smooth_sigma > 0.0 {
         smooth_sigma
@@ -320,7 +478,13 @@ pub fn PlotPanel(
                 <span class="plot-title">{title}</span>
                 <span class="plot-unit">{unit}</span>
             </div>
-            <div class="plot-svg-outer" inner_html=move || render_svg_chart(&series.get(), sigma)/>
+            <div
+                class="plot-svg-outer"
+                inner_html=move || render_svg_chart(&series.get(), x_axis.map(|s| s.get()).as_ref(), sigma)
+            />
+            {x_axis.map(|s| view! {
+                <div class="plot-xaxis" inner_html=move || render_xaxis_strip(&s.get())></div>
+            })}
         </div>
     }
 }

@@ -134,6 +134,11 @@ pub struct LiveFrame {
     pub battery_pct: Option<u8>,
     /// Seconds since the station's last reboot (monotonic).
     pub uptime_s: u32,
+    /// Coarse station latitude in degrees (~1 km), or `None` if unset. Drives
+    /// the chart solar-event markers.
+    pub latitude_deg: Option<f32>,
+    /// Coarse station longitude in degrees (~1 km), or `None` if unset.
+    pub longitude_deg: Option<f32>,
 }
 
 #[cfg(feature = "ssr")]
@@ -161,6 +166,8 @@ impl LiveFrame {
             load_ma: t.load_ma,
             battery_pct: t.battery_pct,
             uptime_s: t.uptime_s,
+            latitude_deg: t.latitude_deg,
+            longitude_deg: t.longitude_deg,
         }
     }
 }

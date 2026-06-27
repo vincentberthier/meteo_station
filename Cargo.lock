@@ -3595,7 +3595,9 @@ dependencies = [
 name = "meteo-chart"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "env_logger",
+ "sunrise",
  "test-log",
 ]
 
@@ -5575,6 +5577,15 @@ name = "subtle"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6bdef32e8150c2a081110b42772ffe7d7c9032b606bc226c8260fd97e0976601"
+
+[[package]]
+name = "sunrise"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15eecb5ec59a060dd9fe8f88c48b701abecd6be9d9c28d55081b80bdda73981c"
+dependencies = [
+ "chrono",
+]
 
 [[package]]
 name = "svgbobdoc"

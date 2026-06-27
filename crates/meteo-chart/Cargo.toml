@@ -8,7 +8,11 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-# pure std crate — no ratatui, no bluer; compiles for host AND wasm32
+# pure std crate — no ratatui, no bluer; compiles for host AND wasm32.
+# chrono (date math only, no clock) + sunrise (solar events) power the x-axis
+# time/sun markers. wasmbind is unified in via meteo-web's chrono dep.
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+sunrise = "3"
 
 [dev-dependencies]
 test-log = { workspace = true }
