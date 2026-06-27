@@ -110,15 +110,25 @@ pub struct LiveFrame {
     pub pressure_hpa: Option<f32>,
     /// Sky (IR) temperature in °C.
     pub sky_temp_c: Option<f32>,
+    /// Illuminance in lux.
+    pub luminosity_lux: Option<f32>,
+    /// Rain rate in mm/h.
+    pub rain_rate_mm_h: Option<f32>,
     /// Wind speed in m/s.
     pub wind_speed_ms: Option<f32>,
     /// Wind direction in degrees (0–360).
     pub wind_dir_deg: Option<f32>,
     /// Solar harvest power in watts (`power_w(solar_mv, solar_ma)`).
     pub solar_w: Option<f64>,
+    /// Raw PV-side voltage in millivolts (for the « V · mA » sub-readout).
+    pub solar_mv: Option<u16>,
+    /// Raw PV-side current in milliamps (for the « V · mA » sub-readout).
+    pub solar_ma: Option<u16>,
     /// Load power in watts (`power_w(batt_mv, load_ma)`). The load draws from
     /// the battery rail, so `batt_mv` is the bus voltage for this calculation.
     pub load_w: Option<f64>,
+    /// Raw load current in milliamps (for the « mA » sub-readout).
+    pub load_ma: Option<u16>,
     /// Battery state-of-charge in percent (0–100), derived on-device from
     /// `batt_mv` via the 1S-LiPo voltage curve.
     pub battery_pct: Option<u8>,
@@ -140,10 +150,15 @@ impl LiveFrame {
             humidity_pct: t.humidity_pct,
             pressure_hpa: t.pressure_hpa,
             sky_temp_c: t.sky_temp_c,
+            luminosity_lux: t.luminosity_lux,
+            rain_rate_mm_h: t.rain_rate_mm_h,
             wind_speed_ms: t.wind_speed_ms,
             wind_dir_deg: t.wind_dir_deg,
             solar_w: meteo_chart::power_w(t.solar_mv, t.solar_ma),
+            solar_mv: t.solar_mv,
+            solar_ma: t.solar_ma,
             load_w: meteo_chart::power_w(t.batt_mv, t.load_ma),
+            load_ma: t.load_ma,
             battery_pct: t.battery_pct,
             uptime_s: t.uptime_s,
         }
@@ -229,6 +244,19 @@ mod tests {
         );
         assert_eq!(lf.battery_pct, Some(90), "battery_pct mismatch");
         assert_eq!(lf.uptime_s, 1_234, "uptime_s mismatch");
+
+        // New atmosphere/energy detail fields must be carried through verbatim.
+        assert!(
+            (lf.luminosity_lux.unwrap() - 500.0_f32).abs() < 1e-4,
+            "luminosity_lux mismatch"
+        );
+        assert!(
+            (lf.rain_rate_mm_h.unwrap() - 0.5_f32).abs() < 1e-4,
+            "rain_rate_mm_h mismatch"
+        );
+        assert_eq!(lf.solar_mv, Some(5_000), "solar_mv mismatch");
+        assert_eq!(lf.solar_ma, Some(200), "solar_ma mismatch");
+        assert_eq!(lf.load_ma, Some(100), "load_ma mismatch");
 
         // Power must match meteo_chart::power_w
         let expected_solar = meteo_chart::power_w(t.solar_mv, t.solar_ma);

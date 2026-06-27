@@ -157,53 +157,100 @@ body {
 // Bande « En direct » / Live summary band
 // ---------------------------------------------------------------------------
 
+// Three-card band (ATMOSPHÈRE · VENT · ÉNERGIE) mirroring the TUI summary.
+// Wind column sizes to the compass; the two data columns split the rest.
 .live-band {
     background-color: var(--crust);
     border-bottom: 1px solid var(--border);
     padding: 0.75rem 1.25rem;
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     gap: 1rem;
-    align-items: flex-start;
+    align-items: stretch;
 }
 
-.live-label {
-    font-family: "JetBrains Mono", monospace;
-    font-size: 0.8rem;
-    font-weight: 700;
-    color: var(--green);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    align-self: center;
-}
-
-.live-cell {
+.live-card {
+    background-color: var(--mantle);
+    border: 1px solid var(--border);
+    border-radius: 0.4rem;
+    padding: 0.5rem 0.75rem;
     display: flex;
     flex-direction: column;
-    gap: 0.2rem;
-    min-width: 80px;
+    gap: 0.1rem;
 }
 
-.live-cell-compass {
-    min-width: 260px;
+.live-card-vent {
+    align-items: center;
+    justify-content: flex-start;
 }
 
-.live-cell-wide {
-    flex: 1;
-    min-width: 180px;
-}
-
-.live-cell-label {
+.live-card-title {
+    margin: 0 0 0.35rem;
     font-size: 0.72rem;
+    font-weight: 700;
     color: var(--subtext0);
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.08em;
 }
 
-.live-cell-value {
+// Label / value row (used by ATMOSPHÈRE rows and the ÉNERGIE headline rows).
+.data-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    line-height: 1.5;
+}
+
+.data-label {
+    font-size: 0.82rem;
+    color: var(--overlay1);
+    white-space: nowrap;
+}
+
+.data-value {
     font-family: "JetBrains Mono", monospace;
-    font-size: 1rem;
+    font-size: 0.95rem;
     color: var(--text);
+    white-space: nowrap;
+}
+
+// Dim secondary readout under an ÉNERGIE headline (e.g. « 5.00 V · 200 mA »).
+.data-sub {
+    font-size: 0.74rem;
+    color: var(--surface2);
+    padding-left: 0.25rem;
+    line-height: 1.3;
+}
+
+// Battery charge/discharge flow line (« ▼ décharge · -0.2 W · ~28 h »).
+.data-flow {
+    font-size: 0.8rem;
+    margin: 0.15rem 0 0.35rem;
+    line-height: 1.4;
+}
+
+// Battery gauge bar.
+.batt-gauge {
+    height: 0.6rem;
+    width: 100%;
+    background-color: var(--surface0);
+    border-radius: 999px;
+    overflow: hidden;
+    margin: 0.1rem 0;
+}
+
+.batt-gauge-fill {
+    height: 100%;
+    border-radius: 999px;
+    transition: width 0.4s ease;
+}
+
+// Stack the cards on narrow viewports; the compass card stays centred.
+@media (max-width: 760px) {
+    .live-band {
+        grid-template-columns: 1fr;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -212,9 +259,9 @@ body {
 
 .compass-wrapper {
     position: relative;
-    width: 240px;
-    height: 240px;
-    margin: 0.5rem auto;
+    width: 200px;
+    height: 200px;
+    margin: 0.25rem auto;
 }
 
 .compass-layers {
