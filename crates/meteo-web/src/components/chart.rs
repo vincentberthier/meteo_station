@@ -40,6 +40,7 @@ const SVG_H: f64 = 200.0;
 const DEFAULT_SIGMA: f64 = 3.5;
 
 /// Data series for one chart metric.
+#[derive(Clone)]
 pub struct ChartSeries {
     /// `(x, avg)` pairs; `x` is typically unix seconds or elapsed seconds.
     pub points: Vec<(f64, f64)>,
@@ -290,6 +291,10 @@ fn render_svg_chart(series: &ChartSeries, smooth_sigma: f64) -> String {
 ///   gradient fill, avg polyline, axis tick labels).
 /// - Uses CSS class `plot-svg` on the `<svg>` for responsive scaling.
 ///
+/// The `series` prop is a **reactive signal** so the SVG is patched in-place
+/// whenever the data changes (no panel remount).  Pass `Signal::stored(s)` for
+/// a static value or `Signal::derive(move || …)` for a derived one.
+///
 /// The caller is responsible for choosing the correct `color_hex` from `meteo_chart::palette`.
 #[component]
 pub fn PlotPanel(
@@ -297,8 +302,8 @@ pub fn PlotPanel(
     title: String,
     /// Unit label (e.g. "°C").
     unit: String,
-    /// Time-series data including optional min–max band.
-    series: ChartSeries,
+    /// Reactive time-series data including optional min–max band.
+    series: Signal<ChartSeries>,
     /// Gaussian smoothing σ in samples. 0.0 (default) uses the TUI Medium preset (3.5).
     #[prop(optional)]
     smooth_sigma: f64,
@@ -308,7 +313,6 @@ pub fn PlotPanel(
     } else {
         DEFAULT_SIGMA
     };
-    let svg = render_svg_chart(&series, sigma);
 
     view! {
         <div class="plot-panel">
@@ -316,7 +320,7 @@ pub fn PlotPanel(
                 <span class="plot-title">{title}</span>
                 <span class="plot-unit">{unit}</span>
             </div>
-            <div class="plot-svg-outer" inner_html=svg/>
+            <div class="plot-svg-outer" inner_html=move || render_svg_chart(&series.get(), sigma)/>
         </div>
     }
 }
@@ -398,30 +402,32 @@ mod tests {
     /// `PlotPanel` must render a `<polyline` (or `<path`) and include the metric colour.
     #[test]
     fn plotpanel_renders_polyline_for_series() -> TestResult {
-        // Given
-        let series = ChartSeries {
-            points: vec![
-                (0.0, 20.0),
-                (1.0, 21.5),
-                (2.0, 19.8),
-                (3.0, 22.1),
-                (4.0, 20.5),
-            ],
-            band: None,
-            color_hex: "#fab387".to_owned(),
-            floor: None,
-            prec: 1,
-        };
+        // Given — run inside a reactive Owner so Signal::stored can allocate
+        let html = Owner::new().with(|| {
+            let series = Signal::stored(ChartSeries {
+                points: vec![
+                    (0.0, 20.0),
+                    (1.0, 21.5),
+                    (2.0, 19.8),
+                    (3.0, 22.1),
+                    (4.0, 20.5),
+                ],
+                band: None,
+                color_hex: "#fab387".to_owned(),
+                floor: None,
+                prec: 1,
+            });
 
-        // When — render to HTML under SSR
-        let html = view! {
-            <PlotPanel
-                title="Température".to_string()
-                unit="°C".to_string()
-                series=series
-            />
-        }
-        .to_html();
+            // When — render to HTML under SSR
+            view! {
+                <PlotPanel
+                    title="Température".to_string()
+                    unit="°C".to_string()
+                    series=series
+                />
+            }
+            .to_html()
+        });
 
         // Then — must contain a polyline or path with metric data AND the colour
         let has_trace = html.contains("<polyline") || html.contains("<path");
@@ -441,24 +447,26 @@ mod tests {
     /// panel well (`<rect`), even though no trace is drawn.
     #[test]
     fn plotpanel_empty_series_renders_placeholder() -> TestResult {
-        // Given — empty series
-        let series = ChartSeries {
-            points: vec![],
-            band: None,
-            color_hex: "#89dceb".to_owned(),
-            floor: Some(0.0),
-            prec: 0,
-        };
+        // Given — run inside a reactive Owner so Signal::stored can allocate
+        let html = Owner::new().with(|| {
+            let series = Signal::stored(ChartSeries {
+                points: vec![],
+                band: None,
+                color_hex: "#89dceb".to_owned(),
+                floor: Some(0.0),
+                prec: 0,
+            });
 
-        // When
-        let html = view! {
-            <PlotPanel
-                title="Vent".to_string()
-                unit="m/s".to_string()
-                series=series
-            />
-        }
-        .to_html();
+            // When
+            view! {
+                <PlotPanel
+                    title="Vent".to_string()
+                    unit="m/s".to_string()
+                    series=series
+                />
+            }
+            .to_html()
+        });
 
         // Then — the panel well must be rendered; no panic
         assert!(

@@ -1,11 +1,11 @@
-//! Live telemetry band — SSE-driven instantaneous readings.
+//! Live telemetry band — reads the shared SSE-driven frame context.
 //!
-//! Under `hydrate` (browser), opens a `web_sys::EventSource` connection to
-//! `/live` and updates a `RwSignal<Option<LiveFrame>>` on each SSE message.
-//! Under `ssr`, the component renders a static placeholder shell.
+//! `LiveBand` is a pure read-side component. It calls
+//! [`expect_context::<RwSignal<Option<LiveFrame>>>`] to obtain the frame
+//! signal that `App` provides and drives with the `/live` SSE stream.
 //!
-//! **Client-only `EventSource`** is guarded with `#[cfg(feature = "hydrate")]`
-//! so the ssr bundle never imports `web_sys` DOM types.
+//! Under `ssr`, the component renders a static placeholder shell with all
+//! fields showing `"N/A"`; hydration wires the reactive updates in the browser.
 
 // The leptos #[component] macro generates a typed-builder struct whose field names
 // shadow the function parameters.  Neither shadow is actionable from user code.
@@ -31,42 +31,6 @@ use meteo_chart::{fmt_battery_flow, fmt_power, palette};
 
 use crate::{components::WindCompass, types::LiveFrame};
 
-/// Open the SSE connection and wire the `frame` signal (browser only).
-///
-/// Extracted so the hydrate-only block is a named, clearly bounded function
-/// rather than an anonymous `cfg` block in the middle of `LiveBand`.
-#[cfg(feature = "hydrate")]
-fn subscribe_sse(frame: RwSignal<Option<LiveFrame>>) {
-    use wasm_bindgen::JsCast as _;
-    use wasm_bindgen::closure::Closure;
-
-    Effect::new(move |_| {
-        let Ok(es) = web_sys::EventSource::new("/live") else {
-            return;
-        };
-
-        let es_clone = es.clone();
-        let cb: Closure<dyn FnMut(web_sys::MessageEvent)> =
-            Closure::wrap(Box::new(move |ev: web_sys::MessageEvent| {
-                let data = ev.data();
-                if let Some(text) = data.as_string()
-                    && let Ok(lf) = serde_json::from_str::<LiveFrame>(&text)
-                {
-                    frame.set(Some(lf));
-                }
-            }));
-
-        es.set_onmessage(Some(cb.as_ref().unchecked_ref()));
-        // Keep both the `EventSource` and the closure alive; forget them
-        // (they live until the reactive owner is dropped).
-        cb.forget();
-
-        on_cleanup(move || {
-            es_clone.close();
-        });
-    });
-}
-
 /// Live instantaneous telemetry band.
 ///
 /// Displays:
@@ -74,15 +38,14 @@ fn subscribe_sse(frame: RwSignal<Option<LiveFrame>>) {
 /// - Wind compass (`WindCompass`) wired to the live frame's direction + speed.
 /// - Power row: Solaire / Charge / Batterie via `fmt_power` / `fmt_battery_flow`.
 ///
-/// Under `hydrate` the data arrives over the `/live` SSE endpoint (one JSON
-/// `LiveFrame` per second). Under `ssr` the static shell is emitted.
+/// Data arrives via the shared `RwSignal<Option<LiveFrame>>` context that
+/// `App` provides. Under `hydrate` the signal is driven by the `/live` SSE
+/// endpoint (one JSON `LiveFrame` per second). Under `ssr` the static shell
+/// is emitted with all fields showing `"N/A"`.
 #[component]
 pub fn LiveBand() -> impl IntoView {
-    let frame: RwSignal<Option<LiveFrame>> = RwSignal::new(None);
-
-    // ── SSE subscription (browser only) ────────────────────────────────────
-    #[cfg(feature = "hydrate")]
-    subscribe_sse(frame);
+    // Read the shared live-frame context provided by App.
+    let frame = expect_context::<RwSignal<Option<LiveFrame>>>();
 
     // ── Derived signals ─────────────────────────────────────────────────────
     let dir_deg: Signal<Option<f32>> = Signal::derive(move || {

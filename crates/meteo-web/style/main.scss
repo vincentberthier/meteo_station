@@ -60,176 +60,6 @@ body {
 }
 
 // ---------------------------------------------------------------------------
-// En-tête / Header band
-// ---------------------------------------------------------------------------
-
-.app-header {
-    background-color: var(--mantle);
-    border-bottom: 1px solid var(--border);
-    padding: 0.5rem 1.25rem;
-    display: flex;
-    align-items: center;
-    gap: 1.5rem;
-
-    .app-title {
-        font-family: "JetBrains Mono", monospace;
-        font-weight: 700;
-        font-size: 1.1rem;
-        color: var(--peach);
-        letter-spacing: 0.04em;
-        text-decoration: none;
-    }
-
-    nav {
-        display: flex;
-        gap: 1rem;
-
-        a {
-            color: var(--subtext1);
-            text-decoration: none;
-            font-size: 0.95rem;
-            padding: 0.25rem 0.5rem;
-            border-radius: 0.25rem;
-            transition: color 0.15s, background-color 0.15s;
-
-            &:hover {
-                color: var(--text);
-                background-color: var(--surface0);
-            }
-
-            &.active {
-                color: var(--peach);
-                background-color: var(--surface0);
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Bande « En direct » / Live summary band
-// ---------------------------------------------------------------------------
-
-.live-band {
-    background-color: var(--crust);
-    border-bottom: 1px solid var(--border);
-    padding: 0.75rem 1.25rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    align-items: center;
-
-    .live-label {
-        font-family: "JetBrains Mono", monospace;
-        font-size: 0.8rem;
-        font-weight: 700;
-        color: var(--green);
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-    }
-
-    .live-value {
-        font-family: "JetBrains Mono", monospace;
-        font-size: 1rem;
-        color: var(--text);
-    }
-
-    .live-unit {
-        font-size: 0.8rem;
-        color: var(--overlay2);
-        margin-left: 0.15rem;
-    }
-
-    // Vitesse du vent / rafale
-    .wind-summary {
-        display: flex;
-        align-items: baseline;
-        gap: 0.35rem;
-        color: var(--sky);
-
-        .gust-label {
-            font-size: 0.75rem;
-            color: var(--overlay1);
-        }
-    }
-
-    // Points cardinaux : N E S O
-    .compass-cardinal {
-        font-family: "JetBrains Mono", monospace;
-        font-size: 0.85rem;
-        color: var(--sky);
-        font-weight: 700;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Barre de diagnostics / Diagnostics bar
-// ---------------------------------------------------------------------------
-
-.diag-bar {
-    background-color: var(--mantle);
-    border-bottom: 1px solid var(--border);
-    padding: 0.3rem 1.25rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    font-size: 0.78rem;
-    color: var(--overlay1);
-
-    .diag-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.3rem;
-        padding: 0.15rem 0.45rem;
-        border-radius: 0.25rem;
-        background-color: var(--surface0);
-        border: 1px solid var(--border);
-
-        &.fault {
-            color: var(--red);
-            border-color: var(--red);
-        }
-
-        &.ok {
-            color: var(--green);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Grille historique / History grid containers
-// ---------------------------------------------------------------------------
-
-.history-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 1rem;
-    padding: 1rem 1.25rem;
-}
-
-.chart-panel {
-    background-color: var(--mantle);
-    border: 1px solid var(--border);
-    border-radius: 0.5rem;
-    overflow: hidden;
-
-    .chart-panel-header {
-        background-color: var(--crust);
-        padding: 0.5rem 0.75rem;
-        border-bottom: 1px solid var(--border);
-        font-family: "JetBrains Mono", monospace;
-        font-size: 0.85rem;
-        color: var(--subtext0);
-        font-weight: 700;
-    }
-
-    .chart-panel-body {
-        padding: 0.75rem;
-        background-color: var(--crust);
-        min-height: 120px;
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Page principale / Main page layout
 // ---------------------------------------------------------------------------
 
@@ -245,45 +75,419 @@ body {
 }
 
 // ---------------------------------------------------------------------------
+// En-tête / Header band
+// ---------------------------------------------------------------------------
+
+.app-header {
+    background-color: var(--mantle);
+    border-bottom: 1px solid var(--border);
+    padding: 0.5rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.app-title {
+    font-family: "JetBrains Mono", monospace;
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: var(--peach);
+    letter-spacing: 0.04em;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.app-nav {
+    display: flex;
+    gap: 0.75rem;
+
+    a {
+        color: var(--subtext1);
+        text-decoration: none;
+        font-size: 0.95rem;
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        transition: color 0.15s, background-color 0.15s;
+
+        &:hover {
+            color: var(--text);
+            background-color: var(--surface0);
+        }
+
+        &.active {
+            color: var(--peach);
+            background-color: var(--surface0);
+        }
+    }
+}
+
+.header-meta {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+// Signal state badge — always combined with one of signal-live/stale/offline.
+.signal-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border: 1px solid currentcolor;
+}
+
+.signal-live    { color: var(--green);  background-color: var(--mantle); }
+.signal-stale   { color: var(--yellow); background-color: var(--mantle); }
+.signal-offline { color: var(--red);    background-color: var(--mantle); }
+
+.app-clock,
+.app-version {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    color: var(--subtext0);
+}
+
+// ---------------------------------------------------------------------------
+// Bande « En direct » / Live summary band
+// ---------------------------------------------------------------------------
+
+.live-band {
+    background-color: var(--crust);
+    border-bottom: 1px solid var(--border);
+    padding: 0.75rem 1.25rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: flex-start;
+}
+
+.live-label {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--green);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    align-self: center;
+}
+
+.live-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 80px;
+}
+
+.live-cell-compass {
+    min-width: 260px;
+}
+
+.live-cell-wide {
+    flex: 1;
+    min-width: 180px;
+}
+
+.live-cell-label {
+    font-size: 0.72rem;
+    color: var(--subtext0);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.live-cell-value {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 1rem;
+    color: var(--text);
+}
+
+// ---------------------------------------------------------------------------
 // Boussole / Compass widget
 // ---------------------------------------------------------------------------
 
-.compass-widget {
+.compass-wrapper {
     position: relative;
-    width: 80px;
-    height: 80px;
+    width: 240px;
+    height: 240px;
+    margin: 0.5rem auto;
+}
 
-    .compass-dial,
-    .compass-needle {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
+.compass-layers {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.compass-dial,
+.compass-needle {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.compass-needle {
+    transform-origin: center center;
+}
+
+.compass-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.2rem;
+    pointer-events: none;
+}
+
+.compass-speed {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.compass-heading {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    color: var(--subtext1);
+}
+
+.compass-gust {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    color: var(--subtext0);
+}
+
+// ---------------------------------------------------------------------------
+// Contrôles temporels / Time controls bar
+// ---------------------------------------------------------------------------
+
+.time-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 1.25rem;
+    background-color: var(--mantle);
+    border-bottom: 1px solid var(--border);
+}
+
+.time-select {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.time-presets {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.time-custom {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.time-input {
+    background-color: var(--surface0);
+    border: 1px solid var(--border);
+    border-radius: 0.25rem;
+    color: var(--text);
+    padding: 0.25rem 0.5rem;
+    font-size: 0.85rem;
+    font-family: "JetBrains Mono", monospace;
+}
+
+.time-sep {
+    color: var(--subtext0);
+    font-size: 0.9rem;
+    padding: 0 0.1rem;
+}
+
+.pan-zoom-controls {
+    display: flex;
+    gap: 0.3rem;
+    align-items: center;
+}
+
+// Shared button style for preset + pan/zoom buttons.
+.preset-btn,
+.pz-btn {
+    background-color: var(--surface0);
+    border: 1px solid var(--border);
+    border-radius: 0.25rem;
+    color: var(--text);
+    padding: 0.25rem 0.6rem;
+    font-size: 0.85rem;
+    font-family: "IBM Plex Sans", sans-serif;
+    cursor: pointer;
+    transition: background-color 0.15s, color 0.15s;
+
+    &:hover {
+        background-color: var(--surface2);
+        color: var(--peach);
+    }
+
+    &:active {
+        background-color: var(--overlay0);
     }
 }
 
 // ---------------------------------------------------------------------------
-// Indicateurs de signal / Signal state indicator
+// Grille historique / History grid containers
 // ---------------------------------------------------------------------------
 
-.signal-live    { color: var(--green); }
-.signal-stale   { color: var(--yellow); }
-.signal-none    { color: var(--red); }
+// Outer wrapper: stacks CAPTEURS and ÉNERGIE sections vertically, full width.
+.history-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    padding: 1rem 1.25rem;
+}
+
+// Each section (CAPTEURS / ÉNERGIE): full width, heading above the panel grid.
+.chart-group {
+    width: 100%;
+}
+
+.chart-group-label {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--peach);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin: 0 0 0.75rem;
+}
+
+// Responsive panel grid: 3 columns on wide screens, 2 on medium, 1 on narrow.
+.panel-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 1100px) {
+    .panel-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 680px) {
+    .panel-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Panneaux de graphiques / Chart panels
+// ---------------------------------------------------------------------------
+
+.plot-panel {
+    background-color: var(--mantle);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    overflow: hidden;
+}
+
+.plot-panel-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    padding: 0.5rem 0.75rem;
+    background-color: var(--crust);
+    border-bottom: 1px solid var(--border);
+}
+
+.plot-title {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.plot-unit {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.75rem;
+    color: var(--subtext0);
+}
+
+.plot-svg-outer {
+    height: 160px;
+    overflow: hidden;
+}
+
+.plot-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+// ---------------------------------------------------------------------------
+// Page comparaison / Comparison page
+// ---------------------------------------------------------------------------
+
+.trace-sel-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-bottom: 1rem;
+}
+
+.trace-sel-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.3rem 0.6rem;
+    background-color: var(--surface0);
+    border: 1px solid var(--border);
+    border-radius: 0.25rem;
+    font-size: 0.9rem;
+}
+
+.trace-add-form {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    padding: 0.5rem 0;
+    margin-bottom: 1rem;
+
+    input,
+    select {
+        background-color: var(--surface0);
+        border: 1px solid var(--border);
+        border-radius: 0.25rem;
+        color: var(--text);
+        padding: 0.25rem 0.5rem;
+        font-size: 0.9rem;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Utilitaires / Utilities
 // ---------------------------------------------------------------------------
 
-.font-mono   { font-family: "JetBrains Mono", monospace; }
-.color-peach { color: var(--peach); }
-.color-teal  { color: var(--teal); }
-.color-sky   { color: var(--sky); }
-.color-blue  { color: var(--blue); }
-.color-green { color: var(--green); }
-.color-red   { color: var(--red); }
-.color-yellow { color: var(--yellow); }
-.color-mauve { color: var(--mauve); }
+.font-mono     { font-family: "JetBrains Mono", monospace; }
+.color-peach   { color: var(--peach); }
+.color-teal    { color: var(--teal); }
+.color-sky     { color: var(--sky); }
+.color-blue    { color: var(--blue); }
+.color-green   { color: var(--green); }
+.color-red     { color: var(--red); }
+.color-yellow  { color: var(--yellow); }
+.color-mauve   { color: var(--mauve); }
 .color-sapphire { color: var(--sapphire); }
 .color-lavender { color: var(--lavender); }
 .color-subtext  { color: var(--subtext0); }

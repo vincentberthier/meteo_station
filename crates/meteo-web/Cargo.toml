@@ -22,11 +22,17 @@ rusqlite = { version = "0.40.1", features = ["bundled"], optional = true }
 bluer = { version = "0.17", features = ["bluetoothd"], optional = true }
 futures = { version = "0.3", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
-chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+# `wasmbind` makes chrono use `js_sys::Date` for `now()` on wasm32; without it
+# `Utc::now()`/`Local::now()` fall through to `std::time`, which panics at runtime
+# on `wasm32-unknown-unknown` ("time not implemented on this platform") and aborts
+# hydration. No-op on native (ssr).
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "wasmbind"] }
 wasm-bindgen = { version = "0.2", optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
-# web-sys DOM types needed by the SSE EventSource in live_band.rs (hydrate only).
+# web-sys DOM types needed by the SSE EventSource (hydrate only).
 web-sys = { version = "0.3", features = ["EventSource", "MessageEvent"], optional = true }
+# js-sys: Date::now() for the staleness timestamp in the 1 Hz freshness check.
+js-sys = { version = "0.3", optional = true }
 meteo-lib = { workspace = true }
 meteo-chart = { path = "../meteo-chart" }
 anyhow = { version = "1", optional = true }
@@ -48,6 +54,7 @@ hydrate = [
     "dep:wasm-bindgen",
     "dep:console_error_panic_hook",
     "dep:web-sys",
+    "dep:js-sys",
     "dep:serde_json",
 ]
 ssr = [

@@ -53,27 +53,26 @@ impl TimeWindow {
         self.to_ts - self.from_ts
     }
 
-    /// Bucket size for query-time aggregation — span→bucket ladder:
+    /// Bucket size for query-time aggregation — span→bucket ladder.
+    ///
+    /// Targets ≲ 4 000 data points so browsers render fluently; 1-minute
+    /// resolution is used for spans up to 2 days.
     ///
     /// | Span        | Bucket   | Max rows |
     /// |-------------|----------|----------|
-    /// | ≤ 2 h       | 1 min    | 120      |
-    /// | ≤ 12 h      | 5 min    | 144      |
-    /// | ≤ 3 d       | 15 min   | 288      |
-    /// | ≤ 2 wk      | 1 h      | 336      |
-    /// | ≤ 3 mo      | 6 h      | 368      |
-    /// | ≤ 1 yr      | 1 d      | 366      |
-    /// | > 1 yr      | 1 wk     | unbounded|
+    /// | ≤ 2 d       | 1 min    | 2 880    |
+    /// | ≤ 2 wk      | 5 min    | 4 032    |
+    /// | ≤ 3 mo      | 30 min   | 4 416    |
+    /// | ≤ 1 yr      | 1 h      | 8 784    |
+    /// | > 1 yr      | 1 day    | unbounded|
     #[must_use]
     pub const fn bucket_secs(&self) -> i64 {
         match self.span_secs() {
-            s if s <= 2 * 3_600 => 60,        // ≤ 2 h    → 1 min
-            s if s <= 12 * 3_600 => 300,      // ≤ 12 h   → 5 min
-            s if s <= 3 * 86_400 => 900,      // ≤ 3 d    → 15 min
-            s if s <= 14 * 86_400 => 3_600,   // ≤ 2 wk   → 1 h
-            s if s <= 92 * 86_400 => 21_600,  // ≤ 3 mo   → 6 h
-            s if s <= 366 * 86_400 => 86_400, // ≤ 1 yr   → 1 d
-            _ => 604_800,                     // > 1 yr   → 1 wk
+            s if s <= 2 * 86_400 => 60,      // ≤ 2 days   → 1 min  (≤ 2 880 pts)
+            s if s <= 14 * 86_400 => 300,    // ≤ 2 weeks  → 5 min  (≤ 4 032 pts)
+            s if s <= 92 * 86_400 => 1_800,  // ≤ 3 months → 30 min (≤ 4 416 pts)
+            s if s <= 366 * 86_400 => 3_600, // ≤ 1 year   → 1 h    (≤ 8 784 pts)
+            _ => 86_400,                     // > 1 year   → 1 day
         }
     }
 }
@@ -165,18 +164,28 @@ fn now_ts() -> i64 {
 /// Renders three FR preset buttons (Jour / Semaine / Mois) that `set` the
 /// `window` signal relative to current time, plus two `<input type="datetime-local">`
 /// fields for a custom range.
+///
+/// Preset buttons re-enable "follow" (`following.set(true)`) so the dashboard
+/// tracks live data. The custom-range "Appliquer" disables it
+/// (`following.set(false)`) since the user is exploring a fixed historical range.
 #[component]
 pub fn TimeSelect(
     /// The current time window; updated when a preset or custom range is applied.
     window: RwSignal<TimeWindow>,
+    /// Whether the dashboard should auto-advance the window to follow "now".
+    /// Preset buttons set this to `true`; custom range apply sets it to `false`.
+    following: RwSignal<bool>,
 ) -> impl IntoView {
     let on_day = move |_| {
+        following.set(true);
         window.set(preset_day(now_ts()));
     };
     let on_week = move |_| {
+        following.set(true);
         window.set(preset_week(now_ts()));
     };
     let on_month = move |_| {
+        following.set(true);
         window.set(preset_month(now_ts()));
     };
 
@@ -185,6 +194,8 @@ pub fn TimeSelect(
     let to_input = RwSignal::new(String::new());
 
     let on_apply = move |_| {
+        // User chose a fixed historical range — stop following "now".
+        following.set(false);
         let from_str = from_input.get();
         let to_str = to_input.get();
         // Parse as naive UTC datetimes → convert to unix timestamps.
@@ -248,45 +259,61 @@ mod tests {
     /// `bucket_secs` returns the correct bucket size for representative spans.
     #[test]
     fn time_window_bucket_secs_scales_with_span() -> TestResult {
-        // Given — 1-hour span → 60 s buckets
+        // Given — 1-hour span → 60 s buckets (≤ 2 days branch)
         let w1h = TimeWindow {
             from_ts: 0,
             to_ts: 3_600,
         };
         assert_eq!(w1h.bucket_secs(), 60, "1-hour span should use 60 s buckets");
 
-        // Given — 1-day span (86400 s) → 15-min buckets (≤ 3 d branch)
+        // Given — 1-day span (86400 s) → 1-min buckets (≤ 2 days branch)
         let w1d = TimeWindow {
             from_ts: 0,
             to_ts: 86_400,
         };
         assert_eq!(
             w1d.bucket_secs(),
-            900,
-            "1-day span should use 900 s (15 min) buckets"
+            60,
+            "1-day span should use 60 s (1 min) buckets"
         );
 
-        // Given — exactly 1 year (366 days) → 1-day buckets
+        // Given — 2-week span (14 days) → 5-min buckets (≤ 2 weeks branch)
+        let w2w = TimeWindow {
+            from_ts: 0,
+            to_ts: 14 * 86_400,
+        };
+        assert_eq!(
+            w2w.bucket_secs(),
+            300,
+            "2-week span should use 300 s (5 min) buckets"
+        );
+
+        // Given — exactly 1 year (366 days) → 1-hour buckets (≤ 1 year branch)
         let w1y = TimeWindow {
             from_ts: 0,
             to_ts: 366 * 86_400,
         };
         assert_eq!(
             w1y.bucket_secs(),
-            86_400,
-            "366-day span should use 86400 s (1 d) buckets"
+            3_600,
+            "366-day span should use 3600 s (1 h) buckets"
         );
 
-        // Also verify row-count invariant: rows should be reasonable (≤ 400)
-        for (span, bucket) in [(3_600_i64, 60_i64), (86_400, 900), (366 * 86_400, 86_400)] {
+        // Verify row-count invariant: rows should stay within reason (≤ 9 000)
+        for (span, bucket) in [
+            (3_600_i64, 60_i64),
+            (86_400, 60),
+            (14 * 86_400, 300),
+            (366 * 86_400, 3_600),
+        ] {
             let w = TimeWindow {
                 from_ts: 0,
                 to_ts: span,
             };
             let rows = span / bucket;
             assert!(
-                rows <= 400,
-                "span {span} / bucket {bucket} = {rows} rows, expected ≤ ~400"
+                rows <= 9_000,
+                "span {span} / bucket {bucket} = {rows} rows, expected ≤ 9 000"
             );
             assert_eq!(
                 w.bucket_secs(),
